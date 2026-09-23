@@ -10,20 +10,20 @@ import data_manager
 # Configuration de la page Streamlit (optimisée PC & mobile)
 # -------------------------------------------------------------------
 st.set_page_config(
-    page_title="Magic Trading & Profit Manager",
+    page_title="Magic Trading & Profit Manager V1.1",
     page_icon="🃏",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-st.title("🃏 Magic Trading & Profit Manager")
+st.title("Magic Trading & Profit Manager")
 
 # Onglets principaux
 tab_stock, tab_search, tab_watchlist, tab_simu = st.tabs([
-    "📊 Stock & Ventes",
-    "➕ Recherche & Ajout",
-    "🎯 Watchlist & Pépites",
-    "🤝 Simulateur Négo"
+    "Stock & Ventes",
+    "Recherche & Ajout",
+    "Watchlist & Pépites",
+    "Simulateur Négo"
 ])
 
 
@@ -31,7 +31,7 @@ tab_stock, tab_search, tab_watchlist, tab_simu = st.tabs([
 # TAB 1 : STOCK & TABLEAU DE BORD FINANCIER
 # ===================================================================
 with tab_stock:
-    st.header("📊 Tableau de bord & Stock")
+    st.header("Tableau de bord & Stock")
 
     collection = data_manager.get_collection()
     
@@ -212,7 +212,7 @@ with tab_search:
 # TAB 3 : WATCHLIST & OPPORUNITÉS D'ACHAT
 # ===================================================================
 with tab_watchlist:
-    st.header("🎯 Watchlist & Opportunités d'Achat (Pépites)")
+    st.header("Watchlist & Opportunités d'Achat (Pépites)")
 
     watchlist = data_manager.get_watchlist()
 
@@ -252,8 +252,8 @@ with tab_simu:
     res_col3.metric("Frais Cardmarket", f"{margin['cm_fee']:.2f} €")
 
     if margin['net_profit'] > 0:
-        st.success("✅ Offre rentable ! Tu dégages de la marge.")
+        st.success("Offre rentable ! Tu dégages de la marge.")
     elif margin['net_profit'] == 0:
-        st.warning("⚠️ Vente à prix coûtant (aucun bénéfice net).")
+        st.warning("Vente à prix coûtant (aucun bénéfice net).")
     else:
-        st.error("❌ Vente à perte ! Propose une contre-offre supérieure.")
+        st.error("Vente à perte ! Propose une contre-offre supérieure.")

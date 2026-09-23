@@ -16,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-st.title("Magic Trading & Profit Manager")
+st.title("Magic Trading & Profit Manager V1.1")
 
 # Onglets principaux
 tab_stock, tab_search, tab_watchlist, tab_simu = st.tabs([
@@ -82,7 +82,7 @@ with tab_stock:
 
             st.dataframe(df[display_cols], use_container_width=True)
 
-            st.subheader("🔎 Détail & Actions sur une carte")
+            st.subheader("Détail & Actions sur une carte")
             card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['purchase_price']}€" for c in filtered_cards]
             selected_idx = st.selectbox("Sélectionner une carte :", range(len(card_names)), format_func=lambda x: card_names[x])
 
@@ -102,7 +102,7 @@ with tab_stock:
 
                     if target_status == "FOR_SALE":
                         st.divider()
-                        st.subheader("🛒 Marquer comme vendue")
+                        st.subheader("Marquer comme vendue")
                         sale_price = st.number_input(
                             "Prix réel de vente (€) :",
                             min_value=0.0,
@@ -131,7 +131,7 @@ with tab_stock:
 # TAB 2 : RECHERCHE & AJOUT DE CARTES
 # ===================================================================
 with tab_search:
-    st.header("➕ Rechercher et Ajouter une carte")
+    st.header("Rechercher et Ajouter une carte")
 
     query = st.text_input("Nom de la carte (FR ou EN) :", placeholder="ex: Sheoldred, Raavan, Atraxa...")
 
@@ -220,7 +220,7 @@ with tab_watchlist:
         st.info("Aucune opportunité repérée pour le moment. Le script automatique d'analyse IA remplira cet onglet.")
     else:
         for item in watchlist:
-            with st.expander(f"📌 {item.get('name')} — Prix Achat Max : {item.get('max_buy_price')} €"):
+            with st.expander(f" {item.get('name')} — Prix Achat Max : {item.get('max_buy_price')} €"):
                 st.write(f"**Cible de prix estimée :** {item.get('estimated_target_price')} €")
                 st.write(f"**Raison :** {item.get('reasoning')}")
                 st.write(f"**Fenêtre d'opportunité :** {item.get('window_hours')}h")
@@ -232,7 +232,7 @@ with tab_watchlist:
 # TAB 4 : SIMULATEUR DE NÉGOCIATION
 # ===================================================================
 with tab_simu:
-    st.header("🤝 Simulateur de Négociation & Contre-Offre")
+    st.header(" Simulateur de Négociation & Contre-Offre")
     st.write("Calcule immédiatement ton bénéfice réel avant d'accepter une offre sur Cardmarket.")
 
     col_s1, col_s2 = st.columns(2)

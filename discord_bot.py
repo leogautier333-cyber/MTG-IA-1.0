@@ -47,3 +47,7 @@ def notify_daily_summary():
 
 if __name__ == "__main__":
     notify_daily_summary()
+    # Test forcé
+    
+    
+notify_daily_summary("🧪 **Test réussi !** Le bot MTG-IA communique parfaitement avec Discord.")

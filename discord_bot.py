@@ -50,4 +50,4 @@ if __name__ == "__main__":
     # Test forcé
     
     
-notify_daily_summary()
+notify_daily_summary("test")

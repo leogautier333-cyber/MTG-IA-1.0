@@ -49,5 +49,3 @@ if __name__ == "__main__":
     notify_daily_summary()
     # Test forcé
     
-    
-send_discord_alert("🧪 Test Bot MTG", "Si tu vois ce message, la connexion Discord fonctionne !", 65280)

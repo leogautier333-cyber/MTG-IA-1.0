@@ -226,7 +226,7 @@ with tab_stock:
 
                     # Affichage avec les icônes SVG de mana
                     mana_html = render_mana_cost_html(mana_cost)
-                    st.markdown(f"### ** {mana_html}", unsafe_allow_html=True)
+                    st.markdown(f"### {mana_html}", unsafe_allow_html=True)
                     st.markdown(f"*{type_line}*")
                     st.divider()
 

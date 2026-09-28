@@ -75,12 +75,29 @@ with tab_stock:
         if filtered_cards:
             df = pd.DataFrame(filtered_cards)
             
-            # Formattage pour l'affichage
+            # Étape 2 : Formattage et épuration du tableau
             display_cols = ["name", "set_code", "condition", "language", "purchase_price", "selling_price", "liquidity_rating"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
 
-            st.dataframe(df[display_cols], use_container_width=True)
+            column_config = {
+                "name": st.column_config.TextColumn("Nom de la carte"),
+                "set_code": st.column_config.TextColumn("Édition", width="small"),
+                "condition": st.column_config.TextColumn("État", width="small"),
+                "language": st.column_config.TextColumn("Langue", width="small"),
+                "purchase_price": st.column_config.NumberColumn("Prix d'Achat", format="%.2f €"),
+                "selling_price": st.column_config.NumberColumn("Prix Vente Fixé", format="%.2f €"),
+                "liquidity_rating": st.column_config.TextColumn("Liquidité", width="small"),
+                "actual_sale_price": st.column_config.NumberColumn("Prix Vente Réel", format="%.2f €"),
+                "date_sold": st.column_config.TextColumn("Date de Vente")
+            }
+
+            st.dataframe(
+                df[display_cols],
+                column_config=column_config,
+                use_container_width=True,
+                hide_index=True
+            )
 
             st.subheader("Détail & Actions sur une carte")
             card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['purchase_price']}€" for c in filtered_cards]
@@ -90,15 +107,53 @@ with tab_stock:
                 card = filtered_cards[selected_idx]
                 col_img, col_info = st.columns([1, 2])
 
+                # Récupération des données Scryfall si absentes de l'objet local
+                scryfall_data = None
+                if card.get("scryfall_id") or card.get("name"):
+                    scryfall_data = scryfall.get_card_by_name(card["name"])
+
+                # Étape 1 : Colonne Image
+                with col_img:
+                    img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
+                    if not img_url and scryfall_data:
+                        img_url = scryfall_data.get("image_uris", {}).get("normal")
+                        if not img_url and "card_faces" in scryfall_data:
+                            img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
+
+                    if img_url:
+                        st.image(img_url, use_container_width=True)
+                    else:
+                        st.warning("🖼️ Image non disponible")
+
+                # Étape 3 : Colonne Fiche Détaillée Style Scryfall
                 with col_info:
-                    st.write(f"Nom : {card['name']}")
-                    st.write(f"Édition : {card['set_code'].upper()} | N° : {card['collector_number']}")
-                    st.write(f"État : {card['condition']} | Langue : {card['language']} | **Foil :** {'Oui' if card['foil'] else 'Non'}")
-                    st.write(f"Prix d'Achat : {card['purchase_price']:.2f} €")
-                    st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
+                    mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
+                    type_line = card.get("type_line") or (scryfall_data.get("type_line") if scryfall_data else "Type inconnu")
+                    oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
+                    legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
+
+                    st.markdown(f"### **{card['name']}** `{mana_cost}`")
+                    st.markdown(f"*{type_line}*")
+                    st.divider()
+
+                    st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")
+
+                    st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
+                    st.write(f"État : | Langue : | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
+                    st.write(f"Prix d'Achat ::.2f} €")
+                    st.write(f"Prix de Vente Fixé ::.2f} €")
                     
                     margin_info = data_manager.calculate_net_margin(card['selling_price'], card['purchase_price'])
                     st.write(f"**Bénéfice Net Estimé :** {margin_info['net_profit']:.2f} € (ROI : {margin_info['roi_percent']} %)")
+
+                    if legalities:
+                        st.markdown("#### **Légalités en Format**")
+                        leg_cols = st.columns(2)
+                        formats = ["standard", "pioneer", "modern", "legacy", "vintage", "commander"]
+                        for idx, fmt in enumerate(formats):
+                            status = legalities.get(fmt, "not_legal")
+                            badge = "🟢 **LEGAL**" if status == "legal" else "⚪ **NOT LEGAL**"
+                            leg_cols[idx % 2].markdown(f"{badge} `{fmt.capitalize()}`")
 
                     if target_status == "FOR_SALE":
                         st.divider()
@@ -109,7 +164,7 @@ with tab_stock:
                             value=float(card['selling_price']),
                             step=0.5
                         )
-                        if st.button("Confirmer la vente"):
+                        if st.button("Confirmer la vente", type="primary"):
                             if data_manager.mark_card_as_sold(card['scryfall_id'], sale_price):
                                 st.success("Carte enregistrée comme vendue !")
                                 st.rerun()

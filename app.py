@@ -2,34 +2,27 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+import re
 
 import scryfall
 import data_manager
 
-import re
-
-def format_mana_cost(mana_str):
+# -------------------------------------------------------------------
+# Fonction d'affichage des symboles de mana SVG (Scryfall)
+# -------------------------------------------------------------------
+def render_mana_cost_html(mana_str):
     if not mana_str:
         return ""
     
-    # Remplacement des symboles de couleur par des puces colorées
-    mana_map = {
-        "{W}": "⚪",  # Blanc
-        "{U}": "🔵",  # Bleu
-        "{B}": "⚫",  # Noir
-        "{R}": "🔴",  # Rouge
-        "{G}": "🟢",  # Vert
-        "{C}": "💎",  # Incolore
-    }
+    def replacer(match):
+        symbol = match.group(1)  # ex: "2", "G", "W/P", "X"
+        code = symbol.replace("/", "")
+        url = f"https://svgs.scryfall.io/card-symbols/{code}.svg"
+        return f'<img src="{url}" width="20" style="vertical-align: middle; margin: 0 1px;" alt="{symbol}" />'
     
-    for symbol, icon in mana_map.items():
-        mana_str = mana_str.replace(symbol, icon)
-    
-    # Transformation des coûts incolores : {2} devient (2)
-    mana_str = re.sub(r'\{(\d+)\}', r'(\1)', mana_str)
-    
-    # Retrait des accolades restantes (ex: {X})
-    return mana_str.replace("{", "").replace("}", "")
+    return re.sub(r'\{([^}]+)\}', replacer, mana_str)
+
+
 # -------------------------------------------------------------------
 # Configuration de la page Streamlit (optimisée PC & mobile)
 # -------------------------------------------------------------------
@@ -99,7 +92,7 @@ with tab_stock:
         if filtered_cards:
             df = pd.DataFrame(filtered_cards)
             
-            # Étape 2 : Formattage et épuration du tableau
+            # Formattage et épuration du tableau
             display_cols = ["name", "set_code", "condition", "language", "purchase_price", "selling_price", "liquidity_rating"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
@@ -131,12 +124,12 @@ with tab_stock:
                 card = filtered_cards[selected_idx]
                 col_img, col_info = st.columns([1, 2])
 
-                # Récupération des données Scryfall si absentes de l'objet local
+                # Récupération des données Scryfall si absentes
                 scryfall_data = None
                 if card.get("scryfall_id") or card.get("name"):
                     scryfall_data = scryfall.get_card_by_name(card["name"])
 
-                # Étape 1 : Colonne Image
+                # Colonne Image
                 with col_img:
                     img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
                     if not img_url and scryfall_data:
@@ -149,15 +142,17 @@ with tab_stock:
                     else:
                         st.warning("🖼️ Image non disponible")
 
-                # Étape 3 : Colonne Fiche Détaillée Style Scryfall
+                # Colonne Fiche Détaillée Style Scryfall
                 with col_info:
                     mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
                     type_line = card.get("type_line") or (scryfall_data.get("type_line") if scryfall_data else "Type inconnu")
                     oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
                     legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
 
-                    formatted_mana = format_mana_cost(mana_cost)
-                    st.markdown(f"### ** {formatted_mana}")
+                    # Affichage avec les icônes SVG de mana
+                    mana_html = render_mana_cost_html(mana_cost)
+                    st.markdown(f"### **{card['name']}** {mana_html}", unsafe_allow_html=True)
+                    st.markdown(f"*{type_line}*")
                     st.divider()
 
                     st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")

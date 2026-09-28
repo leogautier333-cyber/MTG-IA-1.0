@@ -139,10 +139,10 @@ with tab_stock:
                     st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")
 
                     st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
-                    st.write(f"État : | Langue : | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
-                    st.write(f"Prix d'Achat ::.2f} €")
-                    st.write(f"Prix de Vente Fixé ::.2f} €")
-                    
+                    st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
+                    st.write(f"Prix d'Achat : {card['purchase_price']:.2f} €")
+                    st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
+
                     margin_info = data_manager.calculate_net_margin(card['selling_price'], card['purchase_price'])
                     st.write(f"**Bénéfice Net Estimé :** {margin_info['net_profit']:.2f} € (ROI : {margin_info['roi_percent']} %)")
 

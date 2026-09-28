@@ -6,6 +6,30 @@ from datetime import datetime
 import scryfall
 import data_manager
 
+import re
+
+def format_mana_cost(mana_str):
+    if not mana_str:
+        return ""
+    
+    # Remplacement des symboles de couleur par des puces colorées
+    mana_map = {
+        "{W}": "⚪",  # Blanc
+        "{U}": "🔵",  # Bleu
+        "{B}": "⚫",  # Noir
+        "{R}": "🔴",  # Rouge
+        "{G}": "🟢",  # Vert
+        "{C}": "💎",  # Incolore
+    }
+    
+    for symbol, icon in mana_map.items():
+        mana_str = mana_str.replace(symbol, icon)
+    
+    # Transformation des coûts incolores : {2} devient (2)
+    mana_str = re.sub(r'\{(\d+)\}', r'(\1)', mana_str)
+    
+    # Retrait des accolades restantes (ex: {X})
+    return mana_str.replace("{", "").replace("}", "")
 # -------------------------------------------------------------------
 # Configuration de la page Streamlit (optimisée PC & mobile)
 # -------------------------------------------------------------------
@@ -132,8 +156,8 @@ with tab_stock:
                     oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
                     legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
 
-                    st.markdown(f"### **{card['name']}** `{mana_cost}`")
-                    st.markdown(f"*{type_line}*")
+                    formatted_mana = format_mana_cost(mana_cost)
+                    st.markdown(f"### ** {formatted_mana}")
                     st.divider()
 
                     st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")

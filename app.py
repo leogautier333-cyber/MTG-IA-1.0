@@ -73,23 +73,98 @@ with tab_stock:
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Valeur du Stock", f"{total_value:.2f} €")
-        col2.metric("Capital Investi (En Vente)", f"{total_invested:.2f} €")
+        col2.metric("Capital Investi", f"{total_invested:.2f} €")
         col3.metric("Chiffre d'Affaires", f"{turnover:.2f} €")
         col4.metric("Bénéfice Net Cumulé", f"{total_net_profit:.2f} €", delta=f"{total_net_profit:.2f} €")
 
         st.divider()
 
-        # Filtre par statut
-        status_filter = st.radio(
-            "Afficher les cartes :",
-            ["En Vente", "Vendues"],
-            horizontal=True
-        )
+        # Barre de filtres et mode d'affichage
+        col_f1, col_f2, col_f3 = st.columns([1, 1, 1])
+        
+        with col_f1:
+            status_filter = st.radio(
+                "Statut :",
+                ["En Vente", "Vendues"],
+                horizontal=True
+            )
+        
+        with col_f2:
+            view_mode = st.radio(
+                "Mode d'affichage :",
+                ["🖼️ Galerie Visuelle", "📊 Tableau"],
+                horizontal=True
+            )
 
         target_status = "FOR_SALE" if status_filter == "En Vente" else "SOLD"
         filtered_cards = [c for c in collection if c.get("status") == target_status]
 
-        if filtered_cards:
+        with col_f3:
+            search_stock = st.text_input("🔍 Filtrer par nom :", placeholder="ex: Nissa...")
+            if search_stock:
+                filtered_cards = [c for c in filtered_cards if search_stock.lower() in c['name'].lower()]
+
+        st.divider()
+
+        if not filtered_cards:
+            st.warning("Aucune carte ne correspond à tes critères.")
+        
+        # ---------------------------------------------------------------
+        # MODE 1 : GALERIE VISUELLE (TUILES DYNAMIQUES)
+        # ---------------------------------------------------------------
+        elif view_mode == "🖼️ Galerie Visuelle":
+            cols_per_row = 3
+            cols = st.columns(cols_per_row)
+
+            for idx, card in enumerate(filtered_cards):
+                scryfall_data = scryfall.get_card_by_name(card["name"]) if card.get("name") else None
+                img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
+                if not img_url and scryfall_data and "card_faces" in scryfall_data:
+                    img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
+
+                with cols[idx % cols_per_row]:
+                    with st.container(border=True):
+                        # Image de la carte
+                        if img_url:
+                            st.image(img_url, use_container_width=True)
+                        else:
+                            st.write("🖼️ *Image non disponible*")
+
+                        # Titre et Mana
+                        mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
+                        mana_html = render_mana_cost_html(mana_cost)
+                        st.markdown(f"**{card['name']}** {mana_html}", unsafe_allow_html=True)
+
+                        # Badges d'information
+                        st.caption(f"`{card['set_code'].upper()}` | **N°:** {card.get('collector_number', 'N/A')} | **État:** {card.get('condition','NM')} | **Langue:** {card.get('language','FR')}")
+
+                        # Tarifs et Marge
+                        p_price = card.get("purchase_price", 0.0)
+                        s_price = card.get("selling_price", 0.0)
+                        margin_info = data_manager.calculate_net_margin(s_price, p_price)
+
+                        c_p1, c_p2 = st.columns(2)
+                        c_p1.markdown(f"Achat: **{p_price:.2f} €**")
+                        c_p2.markdown(f"Vente: **{s_price:.2f} €**")
+
+                        if margin_info['net_profit'] >= 0:
+                            st.success(f"Marge estimée : **+{margin_info['net_profit']:.2f} €** ({margin_info['roi_percent']}%)")
+                        else:
+                            st.error(f"Marge estimée : **{margin_info['net_profit']:.2f} €")
+
+                        # Action rapide
+                        if target_status == "FOR_SALE":
+                            with st.expander("⚡ Marquer comme vendue"):
+                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), key=f"p_{card['scryfall_id']}_{idx}")
+                                if st.button("Valider la vente", key=f"btn_{card['scryfall_id']}_{idx}", type="primary"):
+                                    if data_manager.mark_card_as_sold(card['scryfall_id'], actual_p):
+                                        st.success("Vendu !")
+                                        st.rerun()
+
+        # ---------------------------------------------------------------
+        # MODE 2 : TABLEAU ÉPURÉ ET FICHE DÉTAILLÉE
+        # ---------------------------------------------------------------
+        else:
             df = pd.DataFrame(filtered_cards)
             
             # Formattage et épuration du tableau
@@ -151,7 +226,7 @@ with tab_stock:
 
                     # Affichage avec les icônes SVG de mana
                     mana_html = render_mana_cost_html(mana_cost)
-                    st.markdown(f"### **{card['name']}** {mana_html}", unsafe_allow_html=True)
+                    st.markdown(f"### ** {mana_html}", unsafe_allow_html=True)
                     st.markdown(f"*{type_line}*")
                     st.divider()
 
@@ -159,8 +234,8 @@ with tab_stock:
 
                     st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
                     st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
-                    st.write(f"Prix d'Achat : {card['purchase_price']:.2f} €")
-                    st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
+                    st.write(f"**Prix d'Achat :** {card['purchase_price']:.2f} €")
+                    st.write(f"**Prix de Vente Fixé :** {card['selling_price']:.2f} €")
 
                     margin_info = data_manager.calculate_net_margin(card['selling_price'], card['purchase_price'])
                     st.write(f"**Bénéfice Net Estimé :** {margin_info['net_profit']:.2f} € (ROI : {margin_info['roi_percent']} %)")
@@ -278,12 +353,13 @@ with tab_search:
                                 )
                                 if success:
                                     st.success(f"{selected_card['name']} ajoutée au stock !")
+                                    st.rerun()
                                 else:
                                     st.error("Erreur d'enregistrement.")
 
 
 # ===================================================================
-# TAB 3 : WATCHLIST & OPPORUNITÉS D'ACHAT
+# TAB 3 : WATCHLIST & OPPORTUNITÉS D'ACHAT
 # ===================================================================
 with tab_watchlist:
     st.header("Watchlist & Opportunités d'Achat (Pépites)")

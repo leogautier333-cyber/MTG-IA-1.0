@@ -26,13 +26,13 @@ def render_mana_cost_html(mana_str):
 # Configuration de la page Streamlit
 # -------------------------------------------------------------------
 st.set_page_config(
-    page_title="Magic Trading & Profit Manager V1.1",
+    page_title="Magic Trading & Profit Manager V1.2",
     page_icon="🃏",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-st.title("Magic Trading & Profit Manager V1.1")
+st.title("Magic Trading & Profit Manager V1.2")
 
 # Onglets principaux
 tab_stock, tab_search, tab_watchlist, tab_simu = st.tabs([

@@ -58,7 +58,7 @@ def add_card_to_collection(**kwargs):
         
         collection.append(card_entry)
         save_collection(collection)
-        st.cache_data.clear()  # Vider le cache Streamlit pour forcer la relecture du JSON
+        st.cache_data.clear()  # Vider le cache Streamlit
         return True
     except Exception as e:
         print(f"Erreur lors de l'ajout de la carte : {e}")

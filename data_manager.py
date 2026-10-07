@@ -2,7 +2,52 @@ import json
 import os
 from datetime import datetime
 import streamlit as st
+import requests
 
+def search_cards(query):
+    """Recherche des cartes uniques via l'API Scryfall."""
+    url = f"https://api.scryfall.com/cards/search?q={query}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json().get("data", [])
+    return []
+
+def get_card_prints(card_id):
+    """Récupère toutes les éditions d'une carte donnée."""
+    url = f"https://api.scryfall.com/cards/{card_id}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        card = response.json()
+        prints_url = card.get("prints_search_uri")
+        if prints_url:
+            p_response = requests.get(prints_url)
+            if p_response.status_code == 200:
+                prints_data = p_response.json().get("data", [])
+                formatted_prints = []
+                for p in prints_data:
+                    prices = p.get("prices", {})
+                    image_url = ""
+                    if "image_uris" in p:
+                        image_url = p["image_uris"].get("normal", "")
+                    elif "card_faces" in p and p["card_faces"]:
+                        image_url = p["card_faces"][0].get("image_uris", {}).get("normal", "")
+                    
+                    formatted_prints.append({
+                        "id": p.get("id"),
+                        "name": p.get("name"),
+                        "set": p.get("set"),
+                        "set_name": p.get("set_name"),
+                        "collector_number": p.get("collector_number"),
+                        "price_normal": prices.get("eur", "N/A"),
+                        "price_foil": prices.get("eur_foil", "N/A"),
+                        "image_url": image_url,
+                        "mana_cost": p.get("mana_cost", ""),
+                        "type_line": p.get("type_line", ""),
+                        "oracle_text": p.get("oracle_text", ""),
+                        "legalities": p.get("legalities", {})
+                    })
+                return formatted_prints
+    return []
 # Chemins absolus basés sur l'emplacement exact du fichier
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")

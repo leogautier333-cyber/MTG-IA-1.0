@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
 import re
 
 import scryfall
@@ -24,7 +23,7 @@ def render_mana_cost_html(mana_str):
 
 
 # -------------------------------------------------------------------
-# Configuration de la page Streamlit (optimisée PC & mobile)
+# Configuration de la page Streamlit
 # -------------------------------------------------------------------
 st.set_page_config(
     page_title="Magic Trading & Profit Manager V1.1",
@@ -63,7 +62,6 @@ with tab_stock:
         total_invested = sum(c["purchase_price"] * c.get("quantity", 1) for c in for_sale_cards)
         
         turnover = sum(c.get("actual_sale_price", 0) * c.get("quantity", 1) for c in sold_cards)
-        total_sold_cost = sum(c["purchase_price"] * c.get("quantity", 1) for c in sold_cards)
         total_net_profit = sum(
             data_manager.calculate_net_margin(
                 c.get("actual_sale_price", 0), c["purchase_price"]
@@ -124,21 +122,17 @@ with tab_stock:
 
                 with cols[idx % cols_per_row]:
                     with st.container(border=True):
-                        # Image de la carte
                         if img_url:
                             st.image(img_url, use_container_width=True)
                         else:
                             st.write("🖼️ *Image non disponible*")
 
-                        # Titre et Mana
                         mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
                         mana_html = render_mana_cost_html(mana_cost)
                         st.markdown(f"**{card['name']}** {mana_html}", unsafe_allow_html=True)
 
-                        # Badges d'information
                         st.caption(f"`{card['set_code'].upper()}` | **N°:** {card.get('collector_number', 'N/A')} | **État:** {card.get('condition','NM')} | **Langue:** {card.get('language','FR')}")
 
-                        # Tarifs et Marge
                         p_price = card.get("purchase_price", 0.0)
                         s_price = card.get("selling_price", 0.0)
                         margin_info = data_manager.calculate_net_margin(s_price, p_price)
@@ -152,7 +146,6 @@ with tab_stock:
                         else:
                             st.error(f"Marge estimée : **{margin_info['net_profit']:.2f} €")
 
-                        # Action rapide
                         if target_status == "FOR_SALE":
                             with st.expander("⚡ Marquer comme vendue"):
                                 actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), key=f"p_{card['scryfall_id']}_{idx}")
@@ -166,8 +159,6 @@ with tab_stock:
         # ---------------------------------------------------------------
         else:
             df = pd.DataFrame(filtered_cards)
-            
-            # Formattage et épuration du tableau
             display_cols = ["name", "set_code", "condition", "language", "purchase_price", "selling_price", "liquidity_rating"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
@@ -199,12 +190,10 @@ with tab_stock:
                 card = filtered_cards[selected_idx]
                 col_img, col_info = st.columns([1, 2])
 
-                # Récupération des données Scryfall si absentes
                 scryfall_data = None
                 if card.get("scryfall_id") or card.get("name"):
                     scryfall_data = scryfall.get_card_by_name(card["name"])
 
-                # Colonne Image
                 with col_img:
                     img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
                     if not img_url and scryfall_data:
@@ -217,16 +206,14 @@ with tab_stock:
                     else:
                         st.warning("🖼️ Image non disponible")
 
-                # Colonne Fiche Détaillée Style Scryfall
                 with col_info:
                     mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
                     type_line = card.get("type_line") or (scryfall_data.get("type_line") if scryfall_data else "Type inconnu")
                     oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
                     legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
 
-                    # Affichage avec les icônes SVG de mana
                     mana_html = render_mana_cost_html(mana_cost)
-                    st.markdown(f"### {mana_html}", unsafe_allow_html=True)
+                    st.markdown(f"### ** {mana_html}", unsafe_allow_html=True)
                     st.markdown(f"*{type_line}*")
                     st.divider()
 
@@ -234,8 +221,8 @@ with tab_stock:
 
                     st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
                     st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
-                    st.write(f"**Prix d'Achat :** {card['purchase_price']:.2f} €")
-                    st.write(f"**Prix de Vente Fixé :** {card['selling_price']:.2f} €")
+                    st.write(f"Prix d'Achat : {card['purchase_price']:.2f} €")
+                    st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
 
                     margin_info = data_manager.calculate_net_margin(card['selling_price'], card['purchase_price'])
                     st.write(f"**Bénéfice Net Estimé :** {margin_info['net_profit']:.2f} € (ROI : {margin_info['roi_percent']} %)")
@@ -303,7 +290,6 @@ with tab_search:
                     
                     selected_card = prints[selected_print_idx]
 
-                    # Visualisation
                     col_pic, col_form = st.columns([1, 2])
 
                     with col_pic:
@@ -338,6 +324,11 @@ with tab_search:
                             submit = st.form_submit_button("Ajouter à mon stock")
 
                             if submit:
+                                # Extraction des métadonnées enrichies
+                                mana_cost = selected_card.get("mana_cost", "")
+                                if not mana_cost and "card_faces" in selected_card:
+                                    mana_cost = selected_card["card_faces"][0].get("mana_cost", "")
+
                                 success = data_manager.add_card_to_collection(
                                     scryfall_id=selected_card["id"],
                                     name=selected_card["name"],
@@ -349,13 +340,19 @@ with tab_search:
                                     quantity=quantity,
                                     purchase_price=purchase_price,
                                     selling_price=selling_price,
-                                    liquidity_rating=liquidity
+                                    liquidity_rating=liquidity,
+                                    image_url=img_url or "",
+                                    mana_cost=mana_cost,
+                                    type_line=selected_card.get("type_line", ""),
+                                    oracle_text=selected_card.get("oracle_text", ""),
+                                    legalities=selected_card.get("legalities", {})
                                 )
                                 if success:
-                                    st.success(f"{selected_card['name']} ajoutée au stock !")
+                                    st.cache_data.clear()
+                                    st.success(f"**{selected_card['name']}** enregistrée dans le stock !")
                                     st.rerun()
                                 else:
-                                    st.error("Erreur d'enregistrement.")
+                                    st.error("Erreur lors de l'écriture dans la base de données.")
 
 
 # ===================================================================

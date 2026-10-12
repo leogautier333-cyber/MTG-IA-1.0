@@ -242,32 +242,77 @@ with tab_stock:
 
         with st.container(border=True):
             st.subheader("Graphique & Analyse Financière")
-            overview = pd.DataFrame({
-                "Indicateur": ["Valeur du Stock", "Capital Investi", "CA Réalisé"],
-                "Montant (€)": [total_value, total_invested, turnover]
-            })
-            value_fig = px.bar(
-                overview,
-                x="Indicateur",
-                y="Montant (€)",
-                color="Indicateur",
-                color_discrete_sequence=["#c9a96e", "#82ad92", "#a88770"],
-                title="Comparatif financier" 
+
+            stock_history_rows = []
+            for card in collection:
+                added_date = pd.to_datetime(card.get("date_added"), errors="coerce")
+                if pd.notna(added_date):
+                    stock_history_rows.append({
+                        "Date": added_date.normalize(),
+                        "Indicateur": "Valeur du stock",
+                        "Montant (€)": float(card.get("selling_price", 0)) * int(card.get("quantity", 1))
+                    })
+
+            stock_history = pd.DataFrame(stock_history_rows)
+            if not stock_history.empty:
+                stock_history = stock_history.groupby(["Date", "Indicateur"], as_index=False)["Montant (€)"].sum()
+                stock_history["Montant (€) cumulés"] = stock_history["Montant (€)"].cumsum()
+
+            profit_history_rows = []
+            for sold_card in sold_cards:
+                sold_date = pd.to_datetime(sold_card.get("date_sold"), errors="coerce")
+                if pd.notna(sold_date):
+                    unit_profit = data_manager.calculate_net_margin(
+                        sold_card.get("actual_sale_price", 0),
+                        sold_card.get("purchase_price", 0)
+                    )["net_profit"]
+                    profit_history_rows.append({
+                        "Date": sold_date.normalize(),
+                        "Indicateur": "Bénéfice cumulé",
+                        "Montant (€)": unit_profit * int(sold_card.get("quantity", 1))
+                    })
+
+            profit_history = pd.DataFrame(profit_history_rows)
+            if not profit_history.empty:
+                profit_history = profit_history.groupby(["Date", "Indicateur"], as_index=False)["Montant (€)"].sum()
+                profit_history["Montant (€) cumulés"] = profit_history["Montant (€)"].cumsum()
+
+            line_df = pd.concat(
+                [
+                    stock_history[["Date", "Indicateur", "Montant (€) cumulés"]].rename(columns={"Montant (€) cumulés": "Montant (€)"})
+                    if not stock_history.empty else pd.DataFrame(columns=["Date", "Indicateur", "Montant (€)"]),
+                    profit_history[["Date", "Indicateur", "Montant (€) cumulés"]].rename(columns={"Montant (€) cumulés": "Montant (€)"})
+                    if not profit_history.empty else pd.DataFrame(columns=["Date", "Indicateur", "Montant (€)"])
+                ],
+                ignore_index=True
             )
-            value_fig.update_layout(
-                template="plotly_dark",
-                showlegend=False,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
-                title_font=dict(family="Playfair Display, Georgia, serif", size=19),
-                margin=dict(l=12, r=12, t=52, b=12),
-                yaxis_title="Euros",
-                xaxis_title=None,
-            )
-            value_fig.update_xaxes(showgrid=False)
-            value_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
-            st.plotly_chart(value_fig, use_container_width=True)
+
+            if line_df.empty:
+                st.caption("Aucune donnée historique pour tracer la courbe. Les ventes ou ajouts de cartes feront apparaître la performance ici.")
+            else:
+                line_fig = px.line(
+                    line_df,
+                    x="Date",
+                    y="Montant (€)",
+                    color="Indicateur",
+                    color_discrete_sequence=["#c9a96e", "#82ad92"],
+                    title="Évolution de la performance"
+                )
+                line_fig.update_traces(mode="lines", line=dict(width=3))
+                line_fig.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
+                    title_font=dict(family="Playfair Display, Georgia, serif", size=19),
+                    margin=dict(l=12, r=12, t=52, b=12),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    xaxis_title=None,
+                    yaxis_title="Euros"
+                )
+                line_fig.update_xaxes(showgrid=False)
+                line_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
+                st.plotly_chart(line_fig, use_container_width=True)
 
         with st.container(border=True):
             st.subheader("Synthèse Financière & Performance")
@@ -527,14 +572,15 @@ with tab_stock:
                     fig = px.line(df_hist, x="Date", y="Prix (€)", title="Évolution du prix Cardmarket")
                     st.plotly_chart(fig, width="stretch")
 
-        with st.popover("📦 Export / restaurer le stock", use_container_width=False):
+        st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+        with st.popover("Export / Import", use_container_width=False):
             export_json, export_csv = st.columns(2)
             collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
             collection_csv = pd.DataFrame(collection).to_csv(index=False).encode("utf-8-sig")
 
             with export_json:
                 st.download_button(
-                    "Télécharger collection.json",
+                    "JSON",
                     data=collection_json,
                     file_name="collection.json",
                     mime="application/json",
@@ -542,7 +588,7 @@ with tab_stock:
                 )
             with export_csv:
                 st.download_button(
-                    "Télécharger le stock en CSV",
+                    "CSV",
                     data=collection_csv,
                     file_name="collection.csv",
                     mime="text/csv",

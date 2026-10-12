@@ -202,68 +202,6 @@ with tab_stock:
 
     collection = data_manager.get_collection()
 
-    with st.expander("Exporter / restaurer le stock"):
-        export_json, export_csv = st.columns(2)
-        collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
-        collection_csv = pd.DataFrame(collection).to_csv(index=False).encode("utf-8-sig")
-
-        with export_json:
-            st.download_button(
-                "Télécharger collection.json",
-                data=collection_json,
-                file_name="collection.json",
-                mime="application/json",
-                width="stretch"
-            )
-        with export_csv:
-            st.download_button(
-                "Télécharger le stock en CSV",
-                data=collection_csv,
-                file_name="collection.csv",
-                mime="text/csv",
-                disabled=not collection,
-                width="stretch"
-            )
-
-        st.divider()
-        uploaded_collection = st.file_uploader(
-            "Choisir une sauvegarde collection.json",
-            type=["json"],
-            help="La restauration remplacera intégralement le stock actuel."
-        )
-
-        if uploaded_collection is not None:
-            uploaded_bytes = uploaded_collection.getvalue()
-            try:
-                restored_collection = json.loads(uploaded_bytes.decode("utf-8-sig"))
-                if not data_manager.is_valid_collection(restored_collection):
-                    raise ValueError(
-                        "Le fichier doit contenir une liste de cartes avec les champs "
-                        "scryfall_id, name, set_code, purchase_price et selling_price."
-                    )
-            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
-                st.error(f"Fichier de sauvegarde invalide : {e}")
-            else:
-                st.warning(
-                    f"Cette opération remplacera les {len(collection)} carte(s) actuelles "
-                    f"par {len(restored_collection)} carte(s)."
-                )
-                upload_hash = hashlib.sha256(uploaded_bytes).hexdigest()[:12]
-                confirmed = st.checkbox(
-                    "Je confirme le remplacement complet du stock.",
-                    key=f"confirm_collection_restore_{upload_hash}"
-                )
-                if st.button(
-                    "Restaurer cette sauvegarde",
-                    type="primary",
-                    disabled=not confirmed
-                ):
-                    if data_manager.replace_collection(restored_collection):
-                        st.success("Le stock a été restauré.")
-                        st.rerun()
-                    else:
-                        st.error("La restauration a échoué ; le stock actuel est inchangé.")
-    
     if not collection:
         st.info("Aucune carte enregistrée dans ton stock pour le moment.")
     else:
@@ -303,6 +241,35 @@ with tab_stock:
                 })
 
         with st.container(border=True):
+            st.subheader("Graphique & Analyse Financière")
+            overview = pd.DataFrame({
+                "Indicateur": ["Valeur du Stock", "Capital Investi", "CA Réalisé"],
+                "Montant (€)": [total_value, total_invested, turnover]
+            })
+            value_fig = px.bar(
+                overview,
+                x="Indicateur",
+                y="Montant (€)",
+                color="Indicateur",
+                color_discrete_sequence=["#c9a96e", "#82ad92", "#a88770"],
+                title="Comparatif financier" 
+            )
+            value_fig.update_layout(
+                template="plotly_dark",
+                showlegend=False,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
+                title_font=dict(family="Playfair Display, Georgia, serif", size=19),
+                margin=dict(l=12, r=12, t=52, b=12),
+                yaxis_title="Euros",
+                xaxis_title=None,
+            )
+            value_fig.update_xaxes(showgrid=False)
+            value_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
+            st.plotly_chart(value_fig, use_container_width=True)
+
+        with st.container(border=True):
             st.subheader("Synthèse Financière & Performance")
             financial_summary = pd.DataFrame([
                 {"Indicateur": "Valeur du Stock", "Valeur": f"{total_value:.2f} €"},
@@ -320,37 +287,6 @@ with tab_stock:
                     "Valeur": st.column_config.TextColumn("Valeur", width="medium")
                 }
             )
-
-            if profit_events:
-                profit_history = (
-                    pd.DataFrame(profit_events)
-                    .groupby("Date", as_index=False)["Bénéfice net (€)"].sum()
-                    .sort_values("Date")
-                )
-                profit_history["Bénéfice cumulé (€)"] = profit_history["Bénéfice net (€)"].cumsum()
-                profit_fig = px.area(
-                    profit_history,
-                    x="Date",
-                    y="Bénéfice cumulé (€)",
-                    title="Bénéfice réalisé dans le temps",
-                    color_discrete_sequence=["#82ad92"]
-                )
-                profit_fig.update_traces(line=dict(width=2), fillcolor="rgba(130,173,146,.18)")
-                profit_fig.update_layout(
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
-                    title_font=dict(family="Playfair Display, Georgia, serif", size=19),
-                    margin=dict(l=12, r=12, t=52, b=12),
-                    xaxis_title=None,
-                    yaxis_title="Euros"
-                )
-                profit_fig.update_xaxes(showgrid=False)
-                profit_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
-                st.plotly_chart(profit_fig, use_container_width=True)
-            else:
-                st.caption("La courbe apparaîtra après l’enregistrement de tes premières ventes.")
 
         st.divider()
 
@@ -590,6 +526,69 @@ with tab_stock:
                     df_hist = pd.DataFrame(hist_data)
                     fig = px.line(df_hist, x="Date", y="Prix (€)", title="Évolution du prix Cardmarket")
                     st.plotly_chart(fig, width="stretch")
+
+        with st.popover("📦 Export / restaurer le stock", use_container_width=False):
+            export_json, export_csv = st.columns(2)
+            collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
+            collection_csv = pd.DataFrame(collection).to_csv(index=False).encode("utf-8-sig")
+
+            with export_json:
+                st.download_button(
+                    "Télécharger collection.json",
+                    data=collection_json,
+                    file_name="collection.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            with export_csv:
+                st.download_button(
+                    "Télécharger le stock en CSV",
+                    data=collection_csv,
+                    file_name="collection.csv",
+                    mime="text/csv",
+                    disabled=not collection,
+                    use_container_width=True
+                )
+
+            st.divider()
+            uploaded_collection = st.file_uploader(
+                "Choisir une sauvegarde collection.json",
+                type=["json"],
+                help="La restauration remplacera intégralement le stock actuel.",
+                label_visibility="collapsed"
+            )
+
+            if uploaded_collection is not None:
+                uploaded_bytes = uploaded_collection.getvalue()
+                try:
+                    restored_collection = json.loads(uploaded_bytes.decode("utf-8-sig"))
+                    if not data_manager.is_valid_collection(restored_collection):
+                        raise ValueError(
+                            "Le fichier doit contenir une liste de cartes avec les champs "
+                            "scryfall_id, name, set_code, purchase_price et selling_price."
+                        )
+                except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
+                    st.error(f"Fichier de sauvegarde invalide : {e}")
+                else:
+                    st.warning(
+                        f"Cette opération remplacera les {len(collection)} carte(s) actuelles "
+                        f"par {len(restored_collection)} carte(s)."
+                    )
+                    upload_hash = hashlib.sha256(uploaded_bytes).hexdigest()[:12]
+                    confirmed = st.checkbox(
+                        "Je confirme le remplacement complet du stock.",
+                        key=f"confirm_collection_restore_{upload_hash}"
+                    )
+                    if st.button(
+                        "Restaurer cette sauvegarde",
+                        type="primary",
+                        disabled=not confirmed
+                    ):
+                        if data_manager.replace_collection(restored_collection):
+                            st.success("Le stock a été restauré.")
+                            st.rerun()
+                        else:
+                            st.error("La restauration a échoué ; le stock actuel est inchangé.")
 
 
 # ===================================================================

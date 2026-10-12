@@ -9,6 +9,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 COLLECTION_FILE = os.path.join(DATA_DIR, "collection.json")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 PRICE_HIST_FILE = os.path.join(DATA_DIR, "price_history.json")
+REQUIRED_COLLECTION_FIELDS = {"scryfall_id", "name", "set_code", "purchase_price", "selling_price"}
 
 def _ensure_data_dir():
     if not os.path.exists(DATA_DIR):
@@ -30,6 +31,32 @@ def save_collection(collection):
     _ensure_data_dir()
     with open(COLLECTION_FILE, "w", encoding="utf-8") as f:
         json.dump(collection, f, ensure_ascii=False, indent=2)
+
+def replace_collection(collection):
+    """Remplace le stock après validation, puis invalide le cache Streamlit."""
+    if not is_valid_collection(collection):
+        return False
+
+    _ensure_data_dir()
+    temp_file = f"{COLLECTION_FILE}.tmp"
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(collection, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, COLLECTION_FILE)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        print(f"Erreur lors du remplacement de la collection : {e}")
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        return False
+
+def is_valid_collection(collection):
+    """Vérifie la structure minimale requise par l'interface de stock."""
+    return isinstance(collection, list) and all(
+        isinstance(card, dict) and REQUIRED_COLLECTION_FIELDS.issubset(card)
+        for card in collection
+    )
 
 def add_card_to_collection(**kwargs):
     try:

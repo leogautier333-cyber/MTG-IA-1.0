@@ -288,48 +288,38 @@ with tab_stock:
         col3.metric("Chiffre d'Affaires", f"{turnover:.2f} €")
         col4.metric("Bénéfice Net Cumulé", f"{total_net_profit:.2f} €", delta=f"{total_net_profit:.2f} €")
 
-        chart_value, chart_profit = st.columns([1, 1.4])
-        with chart_value:
-            overview = pd.DataFrame({
-                "Indicateur": ["Valeur affichée", "Capital investi", "CA réalisé"],
-                "Montant (€)": [total_value, total_invested, turnover]
-            })
-            value_fig = px.bar(
-                overview,
-                x="Indicateur",
-                y="Montant (€)",
-                title="Vue financière",
-                color="Indicateur",
-                color_discrete_sequence=["#c9a96e", "#82ad92", "#a88770"]
-            )
-            value_fig.update_layout(
-                template="plotly_dark",
-                showlegend=False,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
-                title_font=dict(family="Playfair Display, Georgia, serif", size=19),
-                margin=dict(l=12, r=12, t=52, b=12),
-                yaxis_title="Euros",
-                xaxis_title=None
-            )
-            value_fig.update_xaxes(showgrid=False)
-            value_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
-            st.plotly_chart(value_fig, width="stretch")
+        roi_global = (total_net_profit / total_invested * 100) if total_invested else 0.0
+        profit_events = []
+        for sold_card in sold_cards:
+            sold_date = pd.to_datetime(sold_card.get("date_sold"), errors="coerce")
+            if pd.notna(sold_date):
+                unit_profit = data_manager.calculate_net_margin(
+                    sold_card.get("actual_sale_price", 0),
+                    sold_card.get("purchase_price", 0)
+                )["net_profit"]
+                profit_events.append({
+                    "Date": sold_date.normalize(),
+                    "Bénéfice net (€)": unit_profit * int(sold_card.get("quantity", 1))
+                })
 
-        with chart_profit:
-            profit_events = []
-            for sold_card in sold_cards:
-                sold_date = pd.to_datetime(sold_card.get("date_sold"), errors="coerce")
-                if pd.notna(sold_date):
-                    unit_profit = data_manager.calculate_net_margin(
-                        sold_card.get("actual_sale_price", 0),
-                        sold_card.get("purchase_price", 0)
-                    )["net_profit"]
-                    profit_events.append({
-                        "Date": sold_date.normalize(),
-                        "Bénéfice net (€)": unit_profit * int(sold_card.get("quantity", 1))
-                    })
+        with st.container(border=True):
+            st.subheader("Synthèse Financière & Performance")
+            financial_summary = pd.DataFrame([
+                {"Indicateur": "Valeur du Stock", "Valeur": f"{total_value:.2f} €"},
+                {"Indicateur": "Capital Investi", "Valeur": f"{total_invested:.2f} €"},
+                {"Indicateur": "Chiffre d'Affaires", "Valeur": f"{turnover:.2f} €"},
+                {"Indicateur": "Bénéfice Net Cumulé", "Valeur": f"{total_net_profit:.2f} €"},
+                {"Indicateur": "ROI global", "Valeur": f"{roi_global:.2f}%"},
+            ])
+            st.dataframe(
+                financial_summary,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Indicateur": st.column_config.TextColumn("Indicateur", width="large"),
+                    "Valeur": st.column_config.TextColumn("Valeur", width="medium")
+                }
+            )
 
             if profit_events:
                 profit_history = (
@@ -358,9 +348,8 @@ with tab_stock:
                 )
                 profit_fig.update_xaxes(showgrid=False)
                 profit_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
-                st.plotly_chart(profit_fig, width="stretch")
+                st.plotly_chart(profit_fig, use_container_width=True)
             else:
-                st.subheader("Bénéfice réalisé dans le temps")
                 st.caption("La courbe apparaîtra après l’enregistrement de tes premières ventes.")
 
         st.divider()

@@ -1,7 +1,10 @@
-import streamlit as st
+import json
+import hashlib
+import re
+
 import pandas as pd
 import plotly.express as px
-import re
+import streamlit as st
 
 import scryfall
 import data_manager
@@ -22,24 +25,172 @@ def render_mana_cost_html(mana_str):
     return re.sub(r'\{([^}]+)\}', replacer, mana_str)
 
 
+def render_margin_badge(net_profit, roi_percent):
+    is_positive = float(net_profit) >= 0
+    badge_class = "profit-badge" if is_positive else "loss-badge"
+    sign = "+" if is_positive else ""
+    return f"""
+    <div class="margin-badge {badge_class}">
+        <span class="badge-label">Marge</span>
+        <span class="badge-value">{sign}{float(net_profit):.2f} €</span>
+        <span class="badge-sub">{float(roi_percent):.1f}%</span>
+    </div>
+    """
+
+
 # -------------------------------------------------------------------
 # Configuration de la page Streamlit
 # -------------------------------------------------------------------
 st.set_page_config(
-    page_title="Magic Trading & Profit Manager V1.2",
+    page_title="Magic Trading & Profit Manager V1.3",
     page_icon="🃏",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-st.title("Magic Trading & Profit Manager V1.2")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap');
+
+:root {
+    --canvas: #111411;
+    --surface: #191e1a;
+    --surface-raised: #202720;
+    --line: rgba(201, 169, 110, 0.18);
+    --line-soft: rgba(255,255,255,0.08);
+    --gold: #c9a96e;
+    --gold-bright: #f0d79e;
+    --jade: #4ad38b;
+    --jade-soft: #b7f1ce;
+    --rose: #ef6666;
+    --rose-soft: #f4b3b3;
+    --text: #f2efe7;
+    --muted: #adb9af;
+    --shadow: rgba(0,0,0,0.24);
+}
+
+.stApp {
+    color: var(--text);
+    background: linear-gradient(135deg, #111411 0%, #171c18 54%, #121612 100%);
+    font-family: 'DM Sans', sans-serif;
+}
+[data-testid="stHeader"] { background: transparent; }
+.block-container { max-width: 1500px; padding: 2.2rem 3rem 4rem; }
+h1, h2, h3 { font-family: 'Playfair Display', Georgia, serif !important; color: var(--text); }
+h1 { font-size: 2.7rem !important; padding-bottom: .6rem; border-bottom: 1px solid var(--line); }
+h2, h3 { letter-spacing: 0; }
+p, label, .stCaption { color: var(--text); }
+[data-testid="stMetric"] {
+    background: linear-gradient(145deg, rgba(32,39,32,.95), rgba(25,30,26,.8));
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1rem 1.1rem;
+    box-shadow: 0 12px 24px rgba(0,0,0,0.10);
+}
+[data-testid="stMetricLabel"] { color: var(--muted); }
+[data-testid="stMetricValue"] { color: var(--gold-bright); font-family: 'DM Sans', sans-serif; }
+[data-testid="stTabs"] [role="tablist"] {
+    gap: .55rem; border-bottom: 1px solid var(--line); margin-bottom: .25rem;
+}
+[data-testid="stTabs"] button[role="tab"] {
+    color: var(--muted); border-radius: 10px 10px 0 0; padding: .75rem 1rem; border: 1px solid transparent;
+    background: rgba(255,255,255,.01);
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    color: var(--gold-bright) !important;
+    border: 1px solid var(--line) !important;
+    border-bottom: 1px solid transparent !important;
+    background: rgba(201,169,110,.08);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+input[type="radio"] { accent-color: var(--gold) !important; }
+[data-testid="stExpander"] {
+    border: 1px solid var(--line); border-radius: 10px; background: rgba(25,30,26,.72);
+}
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-color: var(--line); border-radius: 10px; background: rgba(25,30,26,.58);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+}
+.stButton > button, [data-testid="stDownloadButton"] button, [data-testid="stFormSubmitButton"] button {
+    border: 1px solid var(--gold); border-radius: 8px; color: var(--gold-bright);
+    background: rgba(201,169,110,.08); transition: background .18s ease, transform .18s ease;
+}
+.stButton > button:hover, [data-testid="stDownloadButton"] button:hover {
+    border-color: var(--gold-bright); background: rgba(201,169,110,.18); transform: translateY(-1px);
+}
+[data-baseweb="input"] > div, [data-baseweb="select"] > div, [data-baseweb="textarea"] {
+    background: rgba(17,20,17,.8); border-color: var(--line-soft); border-radius: 8px;
+}
+[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+[data-testid="stAlert"] { border-radius: 8px; }
+
+.margin-badge {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .45rem;
+    padding: .58rem .75rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    margin-top: .65rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+.margin-badge.profit-badge {
+    background: linear-gradient(135deg, rgba(74,211,139,.22), rgba(41,161,97,.12));
+    border-color: rgba(74,211,139,.4);
+    color: #dbffe9;
+}
+.margin-badge.loss-badge {
+    background: linear-gradient(135deg, rgba(239,102,102,.18), rgba(170,51,51,.12));
+    border-color: rgba(239,102,102,.35);
+    color: #ffe2e2;
+}
+.badge-label { opacity: .82; text-transform: uppercase; letter-spacing: .1em; font-size: .60rem; }
+.badge-value { font-size: .82rem; }
+.badge-sub { opacity: .88; }
+
+.filter-toolbar {
+    background: rgba(17,20,17,.45);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: .8rem .9rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 12px 20px rgba(0,0,0,.08);
+}
+.card-meta {
+    font-size: .74rem;
+    color: var(--muted);
+    line-height: 1.6;
+}
+.card-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: .75rem;
+    margin-bottom: .25rem;
+}
+.card-title-row .stMarkdown {
+    margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+    .block-container { padding: 1rem 1rem 3rem; }
+    h1 { font-size: 2rem !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("Magic Trading & Profit Manager")
 
 # Onglets principaux
-tab_stock, tab_search, tab_watchlist, tab_simu = st.tabs([
+tab_stock, tab_search, tab_watchlist = st.tabs([
     "Stock & Ventes",
     "Recherche & Ajout",
-    "Watchlist & Pépites",
-    "Simulateur Négo"
+    "Watchlist & Pépites"
 ])
 
 
@@ -50,6 +201,68 @@ with tab_stock:
     st.header("Tableau de bord & Stock")
 
     collection = data_manager.get_collection()
+
+    with st.expander("Exporter / restaurer le stock"):
+        export_json, export_csv = st.columns(2)
+        collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
+        collection_csv = pd.DataFrame(collection).to_csv(index=False).encode("utf-8-sig")
+
+        with export_json:
+            st.download_button(
+                "Télécharger collection.json",
+                data=collection_json,
+                file_name="collection.json",
+                mime="application/json",
+                width="stretch"
+            )
+        with export_csv:
+            st.download_button(
+                "Télécharger le stock en CSV",
+                data=collection_csv,
+                file_name="collection.csv",
+                mime="text/csv",
+                disabled=not collection,
+                width="stretch"
+            )
+
+        st.divider()
+        uploaded_collection = st.file_uploader(
+            "Choisir une sauvegarde collection.json",
+            type=["json"],
+            help="La restauration remplacera intégralement le stock actuel."
+        )
+
+        if uploaded_collection is not None:
+            uploaded_bytes = uploaded_collection.getvalue()
+            try:
+                restored_collection = json.loads(uploaded_bytes.decode("utf-8-sig"))
+                if not data_manager.is_valid_collection(restored_collection):
+                    raise ValueError(
+                        "Le fichier doit contenir une liste de cartes avec les champs "
+                        "scryfall_id, name, set_code, purchase_price et selling_price."
+                    )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
+                st.error(f"Fichier de sauvegarde invalide : {e}")
+            else:
+                st.warning(
+                    f"Cette opération remplacera les {len(collection)} carte(s) actuelles "
+                    f"par {len(restored_collection)} carte(s)."
+                )
+                upload_hash = hashlib.sha256(uploaded_bytes).hexdigest()[:12]
+                confirmed = st.checkbox(
+                    "Je confirme le remplacement complet du stock.",
+                    key=f"confirm_collection_restore_{upload_hash}"
+                )
+                if st.button(
+                    "Restaurer cette sauvegarde",
+                    type="primary",
+                    disabled=not confirmed
+                ):
+                    if data_manager.replace_collection(restored_collection):
+                        st.success("Le stock a été restauré.")
+                        st.rerun()
+                    else:
+                        st.error("La restauration a échoué ; le stock actuel est inchangé.")
     
     if not collection:
         st.info("Aucune carte enregistrée dans ton stock pour le moment.")
@@ -58,13 +271,13 @@ with tab_stock:
         for_sale_cards = [c for c in collection if c.get("status") == "FOR_SALE"]
         sold_cards = [c for c in collection if c.get("status") == "SOLD"]
 
-        total_value = sum(c["selling_price"] * c.get("quantity", 1) for c in for_sale_cards)
-        total_invested = sum(c["purchase_price"] * c.get("quantity", 1) for c in for_sale_cards)
+        total_value = sum(float(c.get("selling_price", 0)) * int(c.get("quantity", 1)) for c in for_sale_cards)
+        total_invested = sum(float(c.get("purchase_price", 0)) * int(c.get("quantity", 1)) for c in for_sale_cards)
         
         turnover = sum(c.get("actual_sale_price", 0) * c.get("quantity", 1) for c in sold_cards)
         total_net_profit = sum(
             data_manager.calculate_net_margin(
-                c.get("actual_sale_price", 0), c["purchase_price"]
+                c.get("actual_sale_price", 0), c.get("purchase_price", 0)
             )["net_profit"] * c.get("quantity", 1)
             for c in sold_cards
         )
@@ -75,47 +288,167 @@ with tab_stock:
         col3.metric("Chiffre d'Affaires", f"{turnover:.2f} €")
         col4.metric("Bénéfice Net Cumulé", f"{total_net_profit:.2f} €", delta=f"{total_net_profit:.2f} €")
 
+        chart_value, chart_profit = st.columns([1, 1.4])
+        with chart_value:
+            overview = pd.DataFrame({
+                "Indicateur": ["Valeur affichée", "Capital investi", "CA réalisé"],
+                "Montant (€)": [total_value, total_invested, turnover]
+            })
+            value_fig = px.bar(
+                overview,
+                x="Indicateur",
+                y="Montant (€)",
+                title="Vue financière",
+                color="Indicateur",
+                color_discrete_sequence=["#c9a96e", "#82ad92", "#a88770"]
+            )
+            value_fig.update_layout(
+                template="plotly_dark",
+                showlegend=False,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
+                title_font=dict(family="Playfair Display, Georgia, serif", size=19),
+                margin=dict(l=12, r=12, t=52, b=12),
+                yaxis_title="Euros",
+                xaxis_title=None
+            )
+            value_fig.update_xaxes(showgrid=False)
+            value_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
+            st.plotly_chart(value_fig, width="stretch")
+
+        with chart_profit:
+            profit_events = []
+            for sold_card in sold_cards:
+                sold_date = pd.to_datetime(sold_card.get("date_sold"), errors="coerce")
+                if pd.notna(sold_date):
+                    unit_profit = data_manager.calculate_net_margin(
+                        sold_card.get("actual_sale_price", 0),
+                        sold_card.get("purchase_price", 0)
+                    )["net_profit"]
+                    profit_events.append({
+                        "Date": sold_date.normalize(),
+                        "Bénéfice net (€)": unit_profit * int(sold_card.get("quantity", 1))
+                    })
+
+            if profit_events:
+                profit_history = (
+                    pd.DataFrame(profit_events)
+                    .groupby("Date", as_index=False)["Bénéfice net (€)"].sum()
+                    .sort_values("Date")
+                )
+                profit_history["Bénéfice cumulé (€)"] = profit_history["Bénéfice net (€)"].cumsum()
+                profit_fig = px.area(
+                    profit_history,
+                    x="Date",
+                    y="Bénéfice cumulé (€)",
+                    title="Bénéfice réalisé dans le temps",
+                    color_discrete_sequence=["#82ad92"]
+                )
+                profit_fig.update_traces(line=dict(width=2), fillcolor="rgba(130,173,146,.18)")
+                profit_fig.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="DM Sans, sans-serif", color="#eee9dc"),
+                    title_font=dict(family="Playfair Display, Georgia, serif", size=19),
+                    margin=dict(l=12, r=12, t=52, b=12),
+                    xaxis_title=None,
+                    yaxis_title="Euros"
+                )
+                profit_fig.update_xaxes(showgrid=False)
+                profit_fig.update_yaxes(gridcolor="rgba(238,233,220,.08)", zeroline=False)
+                st.plotly_chart(profit_fig, width="stretch")
+            else:
+                st.subheader("Bénéfice réalisé dans le temps")
+                st.caption("La courbe apparaîtra après l’enregistrement de tes premières ventes.")
+
         st.divider()
 
-        # Barre de filtres et mode d'affichage
-        col_f1, col_f2, col_f3 = st.columns([1, 1, 1])
-        
-        with col_f1:
-            status_filter = st.radio(
-                "Statut :",
-                ["En Vente", "Vendues"],
-                horizontal=True
-            )
-        
-        with col_f2:
-            view_mode = st.radio(
-                "Mode d'affichage :",
-                ["🖼️ Galerie Visuelle", "📊 Tableau"],
-                horizontal=True
-            )
+        with st.container():
+            filter_status, filter_view = st.columns([1.25, 1])
+            with filter_status:
+                status_filter = st.radio("Statut", ["En Vente", "Vendues"], horizontal=True)
+            with filter_view:
+                view_mode = st.radio("Affichage", ["Galerie", "Tableau"], horizontal=True)
 
         target_status = "FOR_SALE" if status_filter == "En Vente" else "SOLD"
-        filtered_cards = [c for c in collection if c.get("status") == target_status]
 
-        with col_f3:
-            search_stock = st.text_input("🔍 Filtrer par nom :", placeholder="ex: Nissa...")
-            if search_stock:
-                filtered_cards = [c for c in filtered_cards if search_stock.lower() in c['name'].lower()]
+        with st.container():
+            filter_search, filter_language, filter_condition = st.columns([2.2, 1, 1])
+            with filter_search:
+                search_stock = st.text_input("Rechercher une carte", placeholder="Nom, édition…", label_visibility="collapsed")
+            with filter_language:
+                languages = sorted({str(c.get("language", "FR")) for c in collection})
+                language_filter = st.selectbox("Langue", ["Toutes"] + languages, label_visibility="collapsed")
+            with filter_condition:
+                conditions = sorted({str(c.get("condition", "NM")) for c in collection})
+                condition_filter = st.selectbox("État", ["Tous"] + conditions, label_visibility="collapsed")
+
+        indexed_cards = [
+            (index, card) for index, card in enumerate(collection)
+            if card.get("status") == target_status
+            and (not search_stock or search_stock.casefold() in str(card.get("name", "")).casefold()
+                 or search_stock.casefold() in str(card.get("set_code", "")).casefold())
+            and (language_filter == "Toutes" or str(card.get("language", "FR")) == language_filter)
+            and (condition_filter == "Tous" or str(card.get("condition", "NM")) == condition_filter)
+        ]
+        filtered_cards = [card for _, card in indexed_cards]
 
         st.divider()
 
+        if filtered_cards:
+            with st.container(border=True):
+                st.caption("Édition rapide")
+                edit_position = st.selectbox(
+                    "Carte à modifier",
+                    range(len(indexed_cards)),
+                    format_func=lambda position: (
+                        f"{indexed_cards[position][1].get('name', 'Carte sans nom')} · "
+                        f"{indexed_cards[position][1].get('set_code', '').upper()} · "
+                        f"#{indexed_cards[position][1].get('collector_number', 'N/A')}"
+                    ),
+                    key="quick_edit_position"
+                )
+                record_index, edit_card = indexed_cards[edit_position]
+                with st.form(f"quick_edit_form_{record_index}"):
+                    edit_quantity, edit_purchase, edit_selling = st.columns(3)
+                    quantity_value = edit_quantity.number_input(
+                        "Quantité", min_value=1, value=max(1, int(edit_card.get("quantity", 1))), step=1
+                    )
+                    purchase_value = edit_purchase.number_input(
+                        "Prix d’achat unitaire (€)", min_value=0.0,
+                        value=float(edit_card.get("purchase_price", 0)), step=0.5
+                    )
+                    selling_value = edit_selling.number_input(
+                        "Prix de vente unitaire (€)", min_value=0.0,
+                        value=float(edit_card.get("selling_price", 0)), step=0.5
+                    )
+                    save_quick_edit = st.form_submit_button("Enregistrer", type="primary")
+
+                if save_quick_edit:
+                    collection[record_index]["quantity"] = int(quantity_value)
+                    collection[record_index]["purchase_price"] = float(purchase_value)
+                    collection[record_index]["selling_price"] = float(selling_value)
+                    data_manager.save_collection(collection)
+                    st.cache_data.clear()
+                    st.toast("Modifications enregistrées", icon="✅")
+                    st.rerun()
+
         if not filtered_cards:
-            st.warning("Aucune carte ne correspond à tes critères.")
+            st.info("Aucune carte ne correspond à ces filtres.")
         
         # ---------------------------------------------------------------
         # MODE 1 : GALERIE VISUELLE (TUILES DYNAMIQUES)
         # ---------------------------------------------------------------
-        elif view_mode == "🖼️ Galerie Visuelle":
+        elif view_mode == "Galerie":
             cols_per_row = 3
             cols = st.columns(cols_per_row)
 
             for idx, card in enumerate(filtered_cards):
-                scryfall_data = scryfall.get_card_by_name(card["name"]) if card.get("name") else None
+                scryfall_data = None
+                if card.get("name") and (not card.get("image_url") or not card.get("mana_cost")):
+                    scryfall_data = scryfall.get_card_by_name(card["name"])
                 img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
                 if not img_url and scryfall_data and "card_faces" in scryfall_data:
                     img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
@@ -123,7 +456,7 @@ with tab_stock:
                 with cols[idx % cols_per_row]:
                     with st.container(border=True):
                         if img_url:
-                            st.image(img_url, use_container_width=True)
+                            st.image(img_url, width="stretch")
                         else:
                             st.write("🖼️ *Image non disponible*")
 
@@ -131,7 +464,11 @@ with tab_stock:
                         mana_html = render_mana_cost_html(mana_cost)
                         st.markdown(f"**{card['name']}** {mana_html}", unsafe_allow_html=True)
 
-                        st.caption(f"`{card['set_code'].upper()}` | **N°:** {card.get('collector_number', 'N/A')} | **État:** {card.get('condition','NM')} | **Langue:** {card.get('language','FR')}")
+                        quantity = int(card.get("quantity", 1))
+                        st.markdown(
+                            f"<div class='card-meta'>`{card['set_code'].upper()}` · N° {card.get('collector_number', 'N/A')} · {card.get('condition', 'NM')} · {card.get('language', 'FR')} · Qté {quantity}{' · Foil' if card.get('foil') else ''}</div>",
+                            unsafe_allow_html=True
+                        )
 
                         p_price = card.get("purchase_price", 0.0)
                         s_price = card.get("selling_price", 0.0)
@@ -141,15 +478,13 @@ with tab_stock:
                         c_p1.markdown(f"Achat: **{p_price:.2f} €**")
                         c_p2.markdown(f"Vente: **{s_price:.2f} €**")
 
-                        if margin_info['net_profit'] >= 0:
-                            st.success(f"Marge estimée : **+{margin_info['net_profit']:.2f} €** ({margin_info['roi_percent']}%)")
-                        else:
-                            st.error(f"Marge estimée : **{margin_info['net_profit']:.2f} €")
+                        margin_value = margin_info["net_profit"] * quantity
+                        st.markdown(render_margin_badge(margin_value, margin_info["roi_percent"]), unsafe_allow_html=True)
 
                         if target_status == "FOR_SALE":
-                            with st.expander("⚡ Marquer comme vendue"):
-                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), key=f"p_{card['scryfall_id']}_{idx}")
-                                if st.button("Valider la vente", key=f"btn_{card['scryfall_id']}_{idx}", type="primary"):
+                            with st.popover("Vendre", use_container_width=True):
+                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{idx}")
+                                if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{idx}", type="primary"):
                                     if data_manager.mark_card_as_sold(card['scryfall_id'], actual_p):
                                         st.success("Vendu !")
                                         st.rerun()
@@ -159,15 +494,17 @@ with tab_stock:
         # ---------------------------------------------------------------
         else:
             df = pd.DataFrame(filtered_cards)
-            display_cols = ["name", "set_code", "condition", "language", "purchase_price", "selling_price", "liquidity_rating"]
+            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "purchase_price", "selling_price", "liquidity_rating"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
 
             column_config = {
                 "name": st.column_config.TextColumn("Nom de la carte"),
                 "set_code": st.column_config.TextColumn("Édition", width="small"),
+                "quantity": st.column_config.NumberColumn("Qté", format="%d", width="small"),
                 "condition": st.column_config.TextColumn("État", width="small"),
                 "language": st.column_config.TextColumn("Langue", width="small"),
+                "foil": st.column_config.CheckboxColumn("Foil", width="small"),
                 "purchase_price": st.column_config.NumberColumn("Prix d'Achat", format="%.2f €"),
                 "selling_price": st.column_config.NumberColumn("Prix Vente Fixé", format="%.2f €"),
                 "liquidity_rating": st.column_config.TextColumn("Liquidité", width="small"),
@@ -176,9 +513,9 @@ with tab_stock:
             }
 
             st.dataframe(
-                df[display_cols],
+                df.reindex(columns=display_cols),
                 column_config=column_config,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -191,7 +528,10 @@ with tab_stock:
                 col_img, col_info = st.columns([1, 2])
 
                 scryfall_data = None
-                if card.get("scryfall_id") or card.get("name"):
+                if card.get("name") and (
+                    not card.get("image_url") or not card.get("mana_cost")
+                    or not card.get("type_line") or not card.get("oracle_text")
+                ):
                     scryfall_data = scryfall.get_card_by_name(card["name"])
 
                 with col_img:
@@ -202,7 +542,7 @@ with tab_stock:
                             img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
 
                     if img_url:
-                        st.image(img_url, use_container_width=True)
+                        st.image(img_url, width="stretch")
                     else:
                         st.warning("🖼️ Image non disponible")
 
@@ -260,7 +600,7 @@ with tab_stock:
                         hist_data.append({"Date": ts, "Prix (€)": val.get("eur")})
                     df_hist = pd.DataFrame(hist_data)
                     fig = px.line(df_hist, x="Date", y="Prix (€)", title="Évolution du prix Cardmarket")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
 
 # ===================================================================
@@ -298,7 +638,7 @@ with tab_search:
                             img_url = selected_card["card_faces"][0].get("image_uris", {}).get("normal")
                         
                         if img_url:
-                            st.image(img_url, use_container_width=True)
+                            st.image(img_url, width="stretch")
 
                     with col_form:
                         st.subheader("Prix actuels Cardmarket")
@@ -366,41 +706,20 @@ with tab_watchlist:
     if not watchlist:
         st.info("Aucune opportunité repérée pour le moment. Le script automatique d'analyse IA remplira cet onglet.")
     else:
-        for item in watchlist:
-            with st.expander(f" {item.get('name')} — Prix Achat Max : {item.get('max_buy_price')} €"):
-                st.write(f"**Cible de prix estimée :** {item.get('estimated_target_price')} €")
-                st.write(f"**Raison :** {item.get('reasoning')}")
-                st.write(f"**Fenêtre d'opportunité :** {item.get('window_hours')}h")
-                if item.get("potential_seller_group_id"):
-                    st.caption(f"Groupe vendeur optimisé : {item.get('potential_seller_group_id')}")
+        st.metric("Opportunités suivies", len(watchlist))
+        opportunity_columns = st.columns(2)
+        for index, item in enumerate(watchlist):
+            max_buy_price = float(item.get("max_buy_price") or 0)
+            target_price = float(item.get("estimated_target_price") or 0)
+            expected_gain = target_price - max_buy_price
 
-
-# ===================================================================
-# TAB 4 : SIMULATEUR DE NÉGOCIATION
-# ===================================================================
-with tab_simu:
-    st.header(" Simulateur de Négociation & Contre-Offre")
-    st.write("Calcule immédiatement ton bénéfice réel avant d'accepter une offre sur Cardmarket.")
-
-    col_s1, col_s2 = st.columns(2)
-    p_price = col_s1.number_input("Ton prix d'achat (€) :", min_value=0.0, value=10.0, step=0.5)
-    offered_price = col_s2.number_input("Prix proposé par l'acheteur (€) :", min_value=0.0, value=15.0, step=0.5)
-
-    col_s3, col_s4 = st.columns(2)
-    shipping = col_s3.number_input("Frais de port (€) :", min_value=0.0, value=1.50, step=0.10)
-    cm_fee_pct = col_s4.number_input("Commission plateforme (%) :", min_value=0.0, value=5.0, step=0.5) / 100.0
-
-    margin = data_manager.calculate_net_margin(offered_price, p_price, shipping, cm_fee_pct)
-
-    st.divider()
-    res_col1, res_col2, res_col3 = st.columns(3)
-    res_col1.metric("Bénéfice Net Réel", f"{margin['net_profit']:.2f} €")
-    res_col2.metric("Retour sur Investissement (ROI)", f"{margin['roi_percent']} %")
-    res_col3.metric("Frais Cardmarket", f"{margin['cm_fee']:.2f} €")
-
-    if margin['net_profit'] > 0:
-        st.success("Offre rentable ! Tu dégages de la marge.")
-    elif margin['net_profit'] == 0:
-        st.warning("Vente à prix coûtant (aucun bénéfice net).")
-    else:
-        st.error("Vente à perte ! Propose une contre-offre supérieure.")
+            with opportunity_columns[index % 2]:
+                with st.container(border=True):
+                    st.markdown(f"#### {item.get('name', 'Carte sans nom')}")
+                    st.caption(f"Fenêtre estimée · {item.get('window_hours', '—')} h")
+                    buy_col, target_col = st.columns(2)
+                    buy_col.metric("Prix d’achat max", f"{max_buy_price:.2f} €")
+                    target_col.metric("Cible estimée", f"{target_price:.2f} €", delta=f"{expected_gain:+.2f} €")
+                    st.write(item.get("reasoning", "Aucune analyse complémentaire."))
+                    if item.get("potential_seller_group_id"):
+                        st.caption(f"Groupe vendeur · {item.get('potential_seller_group_id')}")

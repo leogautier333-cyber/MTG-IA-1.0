@@ -48,7 +48,7 @@ def sync_scryfall_bulk(session=requests, force=False):
 
         updated_at = bulk_info.get("updated_at") or ""
         previous_update = storage.get_metadata("scryfall_bulk_updated_at")
-        if not force and previous_update == updated_at and CACHE_PATH.exists():
+        if not force and previous_update == updated_at:
             storage.record_source_health("scryfall_bulk", True, "Bulk inchangé depuis la dernière synchronisation.")
             return {"status": "UNCHANGED", "updated_at": updated_at}
 

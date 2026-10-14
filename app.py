@@ -1,3 +1,4 @@
+import gzip
 import json
 import hashlib
 import re
@@ -509,6 +510,63 @@ with tab_stock:
                             st.rerun()
                         else:
                             st.error("La restauration a échoué ; le stock actuel est inchangé.")
+
+            st.divider()
+            st.subheader("Sauvegarde complète de la base")
+            if st.button("Préparer la sauvegarde complète", key="prepare_database_backup"):
+                try:
+                    backup_json = json.dumps(
+                        data_manager.storage.export_database_snapshot(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                    st.session_state["database_backup_bytes"] = gzip.compress(backup_json)
+                except Exception as error:
+                    st.error(f"Création de sauvegarde impossible : {error}")
+            backup_bytes = st.session_state.get("database_backup_bytes")
+            if backup_bytes:
+                st.download_button(
+                    "Télécharger la sauvegarde complète",
+                    data=backup_bytes,
+                    file_name="magic-trading-backup.json.gz",
+                    mime="application/gzip",
+                    key="download_database_backup",
+                )
+
+            uploaded_database_backup = st.file_uploader(
+                "Restaurer une sauvegarde complète (.json.gz)",
+                type=["gz"],
+                key="database_backup_upload",
+            )
+            if uploaded_database_backup is not None:
+                backup_upload = uploaded_database_backup.getvalue()
+                backup_hash = hashlib.sha256(backup_upload).hexdigest()[:12]
+                st.warning(
+                    "La restauration remplacera toutes les tables de la base : stock, watchlist, "
+                    "snapshots, signaux, historique Bulk et métadonnées."
+                )
+                confirm_database_restore = st.checkbox(
+                    "Je confirme le remplacement intégral de la base.",
+                    key=f"confirm_database_restore_{backup_hash}",
+                )
+                if st.button(
+                    "Restaurer la base complète",
+                    type="primary",
+                    disabled=not confirm_database_restore,
+                    key="restore_database_backup",
+                ):
+                    try:
+                        snapshot = json.loads(gzip.decompress(backup_upload).decode("utf-8"))
+                        restored_counts = data_manager.storage.restore_database_snapshot(snapshot)
+                    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+                        st.error(f"Sauvegarde invalide ou restauration impossible : {error}")
+                    else:
+                        st.cache_data.clear()
+                        st.success(
+                            "Restauration terminée : "
+                            + ", ".join(f"{table} {count}" for table, count in restored_counts.items())
+                        )
+                        st.rerun()
 
 
 # ===================================================================

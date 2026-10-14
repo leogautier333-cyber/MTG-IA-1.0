@@ -16,24 +16,60 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas plotly streamlit
+        run: python -m pip install -r requirements.txt
 
-      - name: Run Market Engine & AI Analysis
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - name: Validate persistent database configuration
         run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL is required. Configure it as a GitHub Actions secret pointing to PostgreSQL/Neon/Supabase."
+            exit 1
+          fi
+
+      - name: Initialize schema and migrate legacy JSON once
+        run: python -c "from database.storage import initialize_database; initialize_database()"
+
+      - name: Synchronize Scryfall Bulk and market signals
+        run: |
+          python -m services.scryfall_bulk
           python ai_engine.py
-          python discord_bot.py
+          python -c "from services.monitor_worker import run_once; run_once()"
 
-      - name: Commit and push changes
+      - name: Send daily Discord report
+        run: python discord_bot.py
+
+      - name: Create compressed database backup
+        run: python -m database.backup create "$RUNNER_TEMP/magic-trading-backup.json.gz"
+
+      - name: Archive database backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: magic-trading-db-backup-${{ github.run_id }}
+          path: ${{ runner.temp }}/magic-trading-backup.json.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit JSON compatibility exports
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/*.json
-          git diff-index --quiet HEAD || git commit -m "Auto-update market data and predictions [skip ci]"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update market predictions [skip ci]"
+            git push
+          fi
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+concurrency:
+  group: daily-mtg-market-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write

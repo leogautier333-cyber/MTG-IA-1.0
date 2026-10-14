@@ -2,7 +2,11 @@
 
 ## Stockage et snapshots
 
-SQLite est la source de vérité locale, par défaut `data/mtg_manager.sqlite3`. Au premier démarrage, `collection.json`, `watchlist.json` et `price_history.json` sont importés une seule fois ; les JSON originaux restent disponibles comme sauvegarde. `MTG_DATABASE_PATH` permet de déplacer la base. SQLite convient à une instance applicative avec disque persistant ; plusieurs instances GitHub Actions ne doivent pas partager ce fichier. Un hébergement multi-instance nécessite un adaptateur PostgreSQL/Supabase/Neon.
+SQLite est la source de vérité locale, par défaut `data/mtg_manager.sqlite3`. Au premier démarrage, `collection.json`, `watchlist.json` et `price_history.json` sont importés ; les JSON originaux restent disponibles comme sauvegarde, et les nouveaux relevés JSON sont fusionnés sans remplacer le stock. `MTG_DATABASE_PATH` permet de déplacer la base locale. Pour PostgreSQL, définir `DATABASE_URL` (ou `MTG_DATABASE_URL`) sur une URI `postgresql://...` ; la connexion doit autoriser TLS en production. GitHub Actions exige le secret `DATABASE_URL`, car son disque local est éphémère.
+
+Dans GitHub, créer un secret de dépôt `DATABASE_URL` contenant la chaîne de connexion PostgreSQL de Neon/Supabase. Le workflow installe `requirements.txt`, initialise le schéma, exécute le Bulk, les signaux, le watcher et le rapport Discord. Il attache une sauvegarde gzip à chaque exécution ; les artifacts sont conservés 30 jours. Le webhook Discord utilise le secret `DISCORD_WEBHOOK_URL`.
+
+Créer une sauvegarde manuelle avec `python -m database.backup create backup.json.gz` et la restaurer avec `python -m database.backup restore backup.json.gz` après avoir sélectionné la base cible et confirmé l’opération. Pour un script explicitement contrôlé, ajouter `--yes`. L’interface Streamlit fournit aussi le téléchargement et l’envoi d’une sauvegarde complète ; la restauration remplace toutes les tables après confirmation.
 
 Les prix sont enregistrés une fois par jour et impression, foil, langue et état. Une nouvelle observation le même jour met à jour le snapshot plutôt que de créer un faux échantillon de volatilité.
 

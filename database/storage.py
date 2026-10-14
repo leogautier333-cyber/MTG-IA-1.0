@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -9,17 +10,65 @@ from pathlib import Path
 
 PROJECT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_manager.sqlite3"))
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
 
 
+class _DatabaseConnection:
+    def __init__(self, connection, dialect):
+        self.connection = connection
+        self.dialect = dialect
+
+    def execute(self, query, parameters=()):
+        if self.dialect == "postgres":
+            query = query.replace("?", "%s")
+        return self.connection.execute(query, parameters)
+
+    def executemany(self, query, parameters):
+        if self.dialect == "postgres":
+            query = query.replace("?", "%s")
+            cursor = self.connection.cursor()
+            cursor.executemany(query, parameters)
+            return cursor
+        return self.connection.executemany(query, parameters)
+
+    def executescript(self, script):
+        if self.dialect == "sqlite":
+            return self.connection.executescript(script)
+        for statement in script.split(";"):
+            statement = statement.strip()
+            if statement:
+                self.execute(statement)
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
+
 def _connect():
+    if DATABASE_URL:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        connection = psycopg.connect(
+            DATABASE_URL,
+            row_factory=dict_row,
+            connect_timeout=15,
+        )
+        return _DatabaseConnection(connection, "postgres")
+
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
-    return connection
+    return _DatabaseConnection(connection, "sqlite")
 
 
 def _read_json(path, default):
@@ -53,8 +102,13 @@ def _migrate_legacy_data(connection):
 
     price_history_path = legacy_dir / "price_history.json"
     try:
-        stat = price_history_path.stat()
-        price_history_fingerprint = f"{stat.st_size}:{stat.st_mtime_ns}"
+        digest = hashlib.sha256()
+        file_size = 0
+        with price_history_path.open("rb") as history_file:
+            while chunk := history_file.read(1024 * 1024):
+                digest.update(chunk)
+                file_size += len(chunk)
+        price_history_fingerprint = f"{file_size}:{digest.hexdigest()}"
     except OSError:
         price_history_fingerprint = "missing"
     previous_fingerprint = connection.execute(
@@ -141,15 +195,14 @@ def _import_legacy_price_history(connection, path):
 
 
 def initialize_database():
-    database_path = str(DATABASE_PATH.resolve())
+    database_path = DATABASE_URL or str(DATABASE_PATH.resolve())
     if database_path in _INITIALIZED_PATHS:
         return
     with _INITIALIZATION_LOCK:
         if database_path in _INITIALIZED_PATHS:
             return
         with closing(_connect()) as connection:
-            connection.executescript(
-            """
+            schema = """
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -227,10 +280,20 @@ def initialize_database():
                 price_eur_foil REAL
             );
             """
-            )
-            bulk_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
-            }
+            if DATABASE_URL:
+                schema = schema.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
+            connection.executescript(schema)
+            if DATABASE_URL:
+                bulk_columns = {
+                    row["name"] for row in connection.execute(
+                        """SELECT column_name AS name FROM information_schema.columns
+                           WHERE table_schema = current_schema() AND table_name = 'bulk_prints'"""
+                    ).fetchall()
+                }
+            else:
+                bulk_columns = {
+                    row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
+                }
             for column_name in ("price_eur", "price_eur_foil"):
                 if column_name not in bulk_columns:
                     connection.execute(f"ALTER TABLE bulk_prints ADD COLUMN {column_name} REAL")
@@ -444,7 +507,9 @@ def sync_bulk_prints(cards, synced_at=None):
     synced_at = synced_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     summary = {"baseline": False, "new_cards": [], "reprints": [], "legality_changes": []}
     with _database() as connection:
-        existing_count = connection.execute("SELECT COUNT(*) FROM bulk_prints").fetchone()[0]
+        existing_count = connection.execute(
+            "SELECT COUNT(*) AS count FROM bulk_prints"
+        ).fetchone()["count"]
         summary["baseline"] = existing_count == 0
         connection.execute("CREATE TEMP TABLE seen_bulk_prints(scryfall_id TEXT PRIMARY KEY)")
         for card in cards:
@@ -530,8 +595,8 @@ def sync_bulk_prints(cards, synced_at=None):
 
 def _store_alert(connection, alert_id, signal_type, scryfall_id, created_at, payload):
     connection.execute(
-        """INSERT OR IGNORE INTO alerts(alert_id, signal_type, scryfall_id, created_at, payload)
-           VALUES (?, ?, ?, ?, ?)""",
+        """INSERT INTO alerts(alert_id, signal_type, scryfall_id, created_at, payload)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT(alert_id) DO NOTHING""",
         (alert_id, signal_type, scryfall_id, created_at, _serialize(payload)),
     )
 
@@ -577,10 +642,11 @@ def record_alert_evaluation(alert_id, horizon_days, target_date, observed_date,
     evaluated_at = evaluated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
     with _database() as connection:
         connection.execute(
-            """INSERT OR IGNORE INTO alert_evaluations(
+                """INSERT INTO alert_evaluations(
                    alert_id, horizon_days, target_date, observed_date, reference_price,
                    observed_price, change_pct, direction_correct, evaluated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(alert_id, horizon_days) DO NOTHING""",
             (
                 alert_id, int(horizon_days), target_date, observed_date,
                 float(reference_price), float(observed_price), float(change_pct),
@@ -695,3 +761,89 @@ def _as_optional_price(value):
         return float(value) if value not in (None, "") else None
     except (TypeError, ValueError):
         return None
+
+
+BACKUP_TABLE_COLUMNS = {
+    "inventory": (
+        "scryfall_id", "foil", "language", "condition", "set_code",
+        "collector_number", "status", "date_added", "date_sold",
+        "purchase_price", "selling_price", "quantity", "payload",
+    ),
+    "watchlist": ("scryfall_id", "foil", "payload"),
+    "price_snapshots": (
+        "scryfall_id", "foil", "language", "condition", "snapshot_date",
+        "observed_at", "price_eur",
+    ),
+    "source_health": ("source", "checked_at", "succeeded", "details"),
+    "bulk_prints": (
+        "scryfall_id", "oracle_id", "name", "set_code", "released_at",
+        "legalities", "reserved", "price_eur", "price_eur_foil",
+    ),
+    "alerts": ("alert_id", "signal_type", "scryfall_id", "created_at", "payload"),
+    "alert_evaluations": (
+        "alert_id", "horizon_days", "target_date", "observed_date",
+        "reference_price", "observed_price", "change_pct", "direction_correct",
+        "evaluated_at",
+    ),
+    "metadata": ("key", "value"),
+}
+BACKUP_FORMAT_VERSION = 1
+
+
+def export_database_snapshot():
+    with _database() as connection:
+        tables = {}
+        for table_name, columns in BACKUP_TABLE_COLUMNS.items():
+            order_by = {
+                "inventory": "entry_id",
+                "watchlist": "entry_id",
+                "price_snapshots": "snapshot_date, snapshot_id",
+            }.get(table_name)
+            ordering = f" ORDER BY {order_by}" if order_by else ""
+            tables[table_name] = [
+                dict(row) for row in connection.execute(
+                    f"SELECT {', '.join(columns)} FROM {table_name}{ordering}"
+                ).fetchall()
+            ]
+    return {
+        "format": "magic-trading-sql-backup",
+        "format_version": BACKUP_FORMAT_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tables": tables,
+    }
+
+
+def restore_database_snapshot(snapshot):
+    if not isinstance(snapshot, dict) or snapshot.get("format") != "magic-trading-sql-backup":
+        raise ValueError("Format de sauvegarde inconnu.")
+    if snapshot.get("format_version") != BACKUP_FORMAT_VERSION:
+        raise ValueError("Version de sauvegarde non prise en charge.")
+    tables = snapshot.get("tables")
+    if not isinstance(tables, dict) or set(tables) != set(BACKUP_TABLE_COLUMNS):
+        raise ValueError("La sauvegarde est incomplète ou contient un schéma inattendu.")
+    for table_name, columns in BACKUP_TABLE_COLUMNS.items():
+        rows = tables[table_name]
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) or not set(columns).issubset(row)
+            for row in rows
+        ):
+            raise ValueError(f"Données invalides dans la table {table_name}.")
+
+    delete_order = (
+        "alert_evaluations", "alerts", "bulk_prints", "source_health",
+        "price_snapshots", "watchlist", "inventory", "metadata",
+    )
+    with _database() as connection:
+        for table_name in delete_order:
+            connection.execute(f"DELETE FROM {table_name}")
+        for table_name, columns in BACKUP_TABLE_COLUMNS.items():
+            rows = tables[table_name]
+            if not rows:
+                continue
+            placeholders = ", ".join("?" for _ in columns)
+            column_sql = ", ".join(columns)
+            connection.executemany(
+                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+                [tuple(row[column] for column in columns) for row in rows],
+            )
+    return {table_name: len(rows) for table_name, rows in tables.items()}

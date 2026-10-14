@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from database import storage
+from database.backup import create_backup, restore_backup
 
 
 class StorageTests(unittest.TestCase):
@@ -93,6 +94,33 @@ class StorageTests(unittest.TestCase):
             result["legality_changes"][0]["transitions"]["duel"],
             {"from": "legal", "to": "not_legal"},
         )
+
+    def test_compressed_backup_restores_all_application_data(self):
+        storage.save_collection([{
+            "scryfall_id": "card-1", "name": "Card", "set_code": "set1",
+            "purchase_price": 1.0, "selling_price": 2.0,
+        }])
+        storage.save_watchlist([{"scryfall_id": "card-2", "name": "Watched"}])
+        storage.record_price_snapshot(
+            "card-1", 2.5, observed_at="2026-10-14T12:00:00+00:00"
+        )
+        storage.record_source_health("scryfall", True, "ok")
+        storage.record_alert("alert-1", "BUY_SIGNAL", "card-1", "2026-10-14T00:00:00+00:00", {
+            "reference_price": 2.5,
+        })
+        backup_path = Path(self.temporary_directory.name) / "database.json.gz"
+        create_backup(backup_path)
+
+        storage.DATABASE_PATH = Path(self.temporary_directory.name) / "restored.sqlite3"
+        counts = restore_backup(backup_path)
+
+        self.assertEqual(counts["inventory"], 1)
+        self.assertEqual(counts["watchlist"], 1)
+        self.assertEqual(len(storage.get_collection()), 1)
+        self.assertEqual(len(storage.get_watchlist()), 1)
+        self.assertEqual(storage.get_price_history()["card-1"]["2026-10-14"]["eur"], 2.5)
+        self.assertTrue(storage.get_source_health()["scryfall"]["succeeded"])
+        self.assertEqual(storage.get_alerts_for_evaluation()[0]["alert_id"], "alert-1")
 
 
 if __name__ == "__main__":

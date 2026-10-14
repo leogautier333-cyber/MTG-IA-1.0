@@ -40,41 +40,6 @@ def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15
     return alerts
 
 
-def analyze_buyout_signal(price_points, volume_points=None):
-    """Avoid claiming a buyout without transaction-volume evidence."""
-    if len(price_points) < 2:
-        return {"status": "INSUFFICIENT_DATA", "reason": "Deux observations de prix minimum sont nécessaires."}
-
-    previous = float(price_points[-2])
-    current = float(price_points[-1])
-    if previous <= 0:
-        return {"status": "INSUFFICIENT_DATA", "reason": "Prix de référence invalide."}
-
-    change_pct = (current - previous) / previous * 100
-    if change_pct < 30:
-        return {"status": "NO_SPIKE", "change_pct": change_pct, "reason": "Aucune hausse de 30 % entre les deux observations."}
-    if not volume_points or len(volume_points) < 2:
-        return {
-            "status": "INCONCLUSIVE",
-            "change_pct": change_pct,
-            "reason": "Hausse rapide observée, mais le volume réel de ventes Cardmarket n'est pas disponible.",
-        }
-
-    previous_volume = float(volume_points[-2])
-    current_volume = float(volume_points[-1])
-    if current_volume <= previous_volume:
-        return {
-            "status": "SUSPICIOUS",
-            "change_pct": change_pct,
-            "reason": "Le prix augmente fortement sans hausse du volume de ventes fourni.",
-        }
-    return {
-        "status": "DEMAND_SUPPORTED",
-        "change_pct": change_pct,
-        "reason": "Le prix et le volume de ventes fourni augmentent ensemble.",
-    }
-
-
 def suggest_exchange_lot(collection, target_value, max_cards=3, max_candidates=24):
     candidates = [
         card for card in collection

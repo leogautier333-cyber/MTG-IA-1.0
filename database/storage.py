@@ -277,8 +277,17 @@ def initialize_database():
                 legalities TEXT NOT NULL,
                 reserved INTEGER NOT NULL DEFAULT 0,
                 price_eur REAL,
-                price_eur_foil REAL
+                price_eur_foil REAL,
+                edhrec_rank INTEGER
             );
+            CREATE TABLE IF NOT EXISTS card_demand_snapshots (
+                scryfall_id TEXT NOT NULL,
+                snapshot_date TEXT NOT NULL,
+                edhrec_rank INTEGER NOT NULL,
+                PRIMARY KEY(scryfall_id, snapshot_date)
+            );
+            CREATE INDEX IF NOT EXISTS card_demand_history_idx
+                ON card_demand_snapshots(scryfall_id, snapshot_date);
             """
             if DATABASE_URL:
                 schema = schema.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
@@ -294,7 +303,7 @@ def initialize_database():
                 bulk_columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
                 }
-            for column_name in ("price_eur", "price_eur_foil"):
+            for column_name in ("price_eur", "price_eur_foil", "edhrec_rank"):
                 if column_name not in bulk_columns:
                     connection.execute(f"ALTER TABLE bulk_prints ADD COLUMN {column_name} REAL")
             _migrate_legacy_data(connection)
@@ -505,6 +514,11 @@ def set_metadata(key, value):
 
 def sync_bulk_prints(cards, synced_at=None):
     synced_at = synced_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    snapshot_day = str(synced_at)[:10]
+    try:
+        date.fromisoformat(snapshot_day)
+    except ValueError:
+        snapshot_day = datetime.now(timezone.utc).date().isoformat()
     summary = {"baseline": False, "new_cards": [], "reprints": [], "legality_changes": []}
     with _database() as connection:
         existing_count = connection.execute(
@@ -519,6 +533,7 @@ def sync_bulk_prints(cards, synced_at=None):
             oracle_id = card.get("oracle_id")
             legalities = card.get("legalities") or {}
             prices = card.get("prices") or {}
+            edhrec_rank = _as_optional_int(card.get("edhrec_rank"))
             old = connection.execute(
                 "SELECT oracle_id, legalities FROM bulk_prints WHERE scryfall_id = ?",
                 (scryfall_id,),
@@ -569,20 +584,30 @@ def sync_bulk_prints(cards, synced_at=None):
             connection.execute(
                 """INSERT INTO bulk_prints(
                        scryfall_id, oracle_id, name, set_code, released_at, legalities, reserved
-                       , price_eur, price_eur_foil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       , price_eur, price_eur_foil, edhrec_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(scryfall_id) DO UPDATE SET oracle_id = excluded.oracle_id,
                        name = excluded.name, set_code = excluded.set_code,
                        released_at = excluded.released_at, legalities = excluded.legalities,
                            reserved = excluded.reserved, price_eur = excluded.price_eur,
-                           price_eur_foil = excluded.price_eur_foil""",
+                           price_eur_foil = excluded.price_eur_foil,
+                           edhrec_rank = excluded.edhrec_rank""",
                 (
                     scryfall_id, oracle_id, card.get("name", "Carte inconnue"),
                     card.get("set", ""), card.get("released_at"),
                         _serialize(legalities), int(bool(card.get("reserved"))),
                         _as_optional_price(prices.get("eur")),
                         _as_optional_price(prices.get("eur_foil")),
+                        edhrec_rank,
                 ),
             )
+            if edhrec_rank is not None:
+                connection.execute(
+                    """INSERT INTO card_demand_snapshots(scryfall_id, snapshot_date, edhrec_rank)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(scryfall_id, snapshot_date)
+                       DO UPDATE SET edhrec_rank = excluded.edhrec_rank""",
+                    (scryfall_id, snapshot_day, edhrec_rank),
+                )
             connection.execute(
                 "INSERT INTO seen_bulk_prints(scryfall_id) VALUES (?)", (scryfall_id,)
             )
@@ -615,6 +640,54 @@ def get_price_points(scryfall_id, foil=False, language="FR", condition="NM"):
             (str(scryfall_id), int(bool(foil)), str(language), str(condition)),
         ).fetchall()
     return [(row["snapshot_date"], row["price_eur"]) for row in rows]
+
+
+def get_edhrec_history(scryfall_id):
+    with _database() as connection:
+        rows = connection.execute(
+            """SELECT snapshot_date, edhrec_rank FROM card_demand_snapshots
+               WHERE scryfall_id = ? ORDER BY snapshot_date""",
+            (str(scryfall_id),),
+        ).fetchall()
+        if not rows:
+            card = connection.execute(
+                "SELECT edhrec_rank FROM bulk_prints WHERE scryfall_id = ?",
+                (str(scryfall_id),),
+            ).fetchone()
+            if card and card["edhrec_rank"] is not None:
+                return [{"snapshot_date": None, "edhrec_rank": card["edhrec_rank"]}]
+            return []
+    return [dict(row) for row in rows]
+
+
+def get_recent_market_events(scryfall_id, since_date):
+    with _database() as connection:
+        card = connection.execute(
+            "SELECT oracle_id FROM bulk_prints WHERE scryfall_id = ?",
+            (str(scryfall_id),),
+        ).fetchone()
+        oracle_id = card["oracle_id"] if card else None
+        rows = connection.execute(
+            """SELECT alert_id, signal_type, scryfall_id, created_at, payload
+               FROM alerts
+               WHERE signal_type IN ('REPRINT', 'LEGALITY_CHANGE') AND created_at >= ?
+               ORDER BY created_at""",
+            (str(since_date),),
+        ).fetchall()
+    events = []
+    for row in rows:
+        payload = json.loads(row["payload"])
+        same_print = row["scryfall_id"] == str(scryfall_id)
+        same_oracle = bool(oracle_id and payload.get("oracle_id") == oracle_id)
+        if same_print or (row["signal_type"] == "REPRINT" and same_oracle):
+            events.append({
+                "alert_id": row["alert_id"],
+                "signal_type": row["signal_type"],
+                "scryfall_id": row["scryfall_id"],
+                "created_at": row["created_at"],
+                "payload": payload,
+            })
+    return events
 
 
 def get_alerts_for_evaluation():
@@ -727,13 +800,29 @@ def get_printing_profile(scryfall_id):
             "change_90d_pct": sum(event_impacts[90]) / len(event_impacts[90]) if event_impacts[90] else None,
         })
 
-    released_dates = [printing["released_at"] for printing in printings if printing["released_at"]]
+    released_dates = sorted({
+        printing["released_at"] for printing in printings if printing["released_at"]
+    })
+    release_intervals_days = []
+    for previous_release, current_release in zip(released_dates, released_dates[1:]):
+        try:
+            release_intervals_days.append(
+                (date.fromisoformat(current_release) - date.fromisoformat(previous_release)).days
+            )
+        except ValueError:
+            continue
     return {
         "scryfall_id": selected["scryfall_id"],
         "oracle_id": selected["oracle_id"],
         "name": selected["name"],
         "reserved_list": any(bool(printing["reserved"]) for printing in printings),
         "total_printings": len(printings),
+        "release_dates": released_dates,
+        "release_intervals_days": release_intervals_days,
+        "average_release_interval_days": (
+            sum(release_intervals_days) / len(release_intervals_days)
+            if release_intervals_days else None
+        ),
         "last_release_at": max(released_dates) if released_dates else None,
         "reprint_events": reprint_events,
     }
@@ -763,6 +852,13 @@ def _as_optional_price(value):
         return None
 
 
+def _as_optional_int(value):
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 BACKUP_TABLE_COLUMNS = {
     "inventory": (
         "scryfall_id", "foil", "language", "condition", "set_code",
@@ -777,8 +873,9 @@ BACKUP_TABLE_COLUMNS = {
     "source_health": ("source", "checked_at", "succeeded", "details"),
     "bulk_prints": (
         "scryfall_id", "oracle_id", "name", "set_code", "released_at",
-        "legalities", "reserved", "price_eur", "price_eur_foil",
+        "legalities", "reserved", "price_eur", "price_eur_foil", "edhrec_rank",
     ),
+    "card_demand_snapshots": ("scryfall_id", "snapshot_date", "edhrec_rank"),
     "alerts": ("alert_id", "signal_type", "scryfall_id", "created_at", "payload"),
     "alert_evaluations": (
         "alert_id", "horizon_days", "target_date", "observed_date",
@@ -831,7 +928,7 @@ def restore_database_snapshot(snapshot):
 
     delete_order = (
         "alert_evaluations", "alerts", "bulk_prints", "source_health",
-        "price_snapshots", "watchlist", "inventory", "metadata",
+        "card_demand_snapshots", "price_snapshots", "watchlist", "inventory", "metadata",
     )
     with _database() as connection:
         for table_name in delete_order:

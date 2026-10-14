@@ -7,7 +7,11 @@ from unittest.mock import patch
 from database import storage
 from services.backtesting import backtest_price_threshold, evaluate_alerts
 from services.deck_importer import analyze_decklist, parse_plain_decklist
-from services.market_signals import calculate_buyout_suspicion, calculate_reprint_risk
+from services.market_signals import (
+    analyze_snapshot_buyout,
+    calculate_reprint_risk,
+    scan_snapshot_buyouts,
+)
 from services.portfolio_analytics import analyze_portfolio, simulate_sale, suggest_arbitrage
 from services.source_health import get_source_statuses
 from agents.tool_agent import ToolCallingAgent
@@ -67,11 +71,13 @@ class WorkflowTests(unittest.TestCase):
             "id": "old", "oracle_id": "oracle-1", "name": "Card",
             "set": "old", "released_at": "2010-01-01", "legalities": {},
             "prices": {"eur": "7.00", "eur_foil": "12.00"},
+            "edhrec_rank": 50000,
         }
         new_print = {
             "id": "new", "oracle_id": "oracle-1", "name": "Card",
             "set": "new", "released_at": "2020-01-01", "legalities": {},
             "prices": {"eur": "5.00", "eur_foil": "9.00"},
+            "edhrec_rank": 12000,
         }
         storage.sync_bulk_prints([old_print], synced_at="2010-01-01T00:00:00+00:00")
         storage.sync_bulk_prints([old_print, new_print], synced_at="2020-01-01T00:00:00+00:00")
@@ -79,8 +85,6 @@ class WorkflowTests(unittest.TestCase):
             storage.record_price_snapshot("old", price, observed_at=f"{day}T00:00:00+00:00")
 
         risk = calculate_reprint_risk("old", today=date(2026, 10, 14))
-        missing_proxies = calculate_buyout_suspicion(50)
-        suspicious = calculate_buyout_suspicion(50, -40, -30, 35)
         arbitrage = suggest_arbitrage([{
             "scryfall_id": "old", "name": "Card", "set_code": "old",
             "status": "FOR_SALE", "quantity": 1, "purchase_price": 1,
@@ -89,9 +93,77 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(risk["expected_change_30d_pct"], -20)
         self.assertEqual(risk["expected_change_90d_pct"], -30)
-        self.assertEqual(missing_proxies["status"], "INCONCLUSIVE")
-        self.assertEqual(suspicious["status"], "HIGH_SUSPICION")
+        self.assertEqual(risk["release_intervals_days"], [3652])
         self.assertEqual(arbitrage[0]["buy_set"], "new")
+        demand_history = storage.get_edhrec_history("old")
+        self.assertEqual(demand_history[-1]["edhrec_rank"], 50000)
+
+    def test_snapshot_buyout_uses_reprint_legality_and_edhrec_evidence(self):
+        tracked = {
+            "id": "spike-card", "oracle_id": "spike-oracle", "name": "Spike Card",
+            "set": "set1", "released_at": "2020-01-01", "legalities": {},
+            "edhrec_rank": 50000,
+        }
+        storage.sync_bulk_prints([tracked], synced_at="2026-09-14T00:00:00+00:00")
+        updated = {**tracked, "edhrec_rank": 10000}
+        storage.sync_bulk_prints([updated], synced_at="2026-10-14T00:00:00+00:00")
+        for day, price in (
+            ("2026-09-01", 10.0), ("2026-09-07", 10.1), ("2026-09-14", 10.0),
+            ("2026-10-10", 13.0), ("2026-10-14", 15.0),
+        ):
+            storage.record_price_snapshot(
+                "spike-card", price, observed_at=f"{day}T12:00:00+00:00"
+            )
+
+        supported = analyze_snapshot_buyout("spike-card", today=date(2026, 10, 14))
+        self.assertEqual(supported["status"], "DEMAND_SUPPORTED")
+        self.assertAlmostEqual(supported["edhrec_improvement_pct_30d"], 80)
+        stale = analyze_snapshot_buyout("spike-card", today=date(2026, 10, 20))
+        self.assertEqual(stale["status"], "STALE_DATA")
+
+        storage.record_alert(
+            "recent-reprint", "REPRINT", "new-print", "2026-10-13T00:00:00+00:00",
+            {"oracle_id": "spike-oracle", "scryfall_id": "new-print"},
+        )
+        fundamental = analyze_snapshot_buyout("spike-card", today=date(2026, 10, 14))
+        self.assertEqual(fundamental["status"], "FUNDAMENTAL_EVENT")
+        self.assertEqual(fundamental["score"], 0)
+        storage.record_alert(
+            "recent-ban", "LEGALITY_CHANGE", "spike-card", "2026-10-13T01:00:00+00:00",
+            {"transitions": {"duel": {"from": "legal", "to": "not_legal"}}},
+        )
+        legality_event = analyze_snapshot_buyout("spike-card", today=date(2026, 10, 14))
+        self.assertEqual(legality_event["status"], "FUNDAMENTAL_EVENT")
+        self.assertIn("LEGALITY_CHANGE", {event["signal_type"] for event in legality_event["fundamental_events"]})
+
+    def test_snapshot_buyout_flags_an_unexplained_spike_and_logs_it(self):
+        storage.sync_bulk_prints([{
+            "id": "spec-card", "oracle_id": "spec-oracle", "name": "Spec Card",
+            "set": "set1", "released_at": "2020-01-01", "legalities": {},
+            "edhrec_rank": 50000,
+        }], synced_at="2026-09-14T00:00:00+00:00")
+        storage.sync_bulk_prints([{
+            "id": "spec-card", "oracle_id": "spec-oracle", "name": "Spec Card",
+            "set": "set1", "released_at": "2020-01-01", "legalities": {},
+            "edhrec_rank": 50000,
+        }], synced_at="2026-10-14T00:00:00+00:00")
+        for day, price in (
+            ("2026-09-01", 10.0), ("2026-09-07", 10.1), ("2026-09-14", 10.0),
+            ("2026-10-10", 13.0), ("2026-10-14", 15.0),
+        ):
+            storage.record_price_snapshot(
+                "spec-card", price, observed_at=f"{day}T12:00:00+00:00"
+            )
+
+        finding = analyze_snapshot_buyout("spec-card", today=date(2026, 10, 14))
+        alerts = scan_snapshot_buyouts([{
+            "scryfall_id": "spec-card", "name": "Spec Card", "status": "FOR_SALE",
+        }])
+
+        self.assertIn(finding["status"], {"SUSPICIOUS", "HIGH_SUSPICION"})
+        self.assertGreaterEqual(finding["score"], 60)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["card_name"], "Spec Card")
 
     def test_deck_import_and_tool_number_validation(self):
         deck = parse_plain_decklist("Commander\n1 Sol Ring (CMM) 396\n2x Fire // Ice")

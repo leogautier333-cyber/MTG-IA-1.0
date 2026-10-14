@@ -13,6 +13,7 @@ from services.backtesting import evaluate_alerts
 from services.source_health import get_source_statuses
 from services.spoiler_watcher import scan_spoilers_and_trends
 from services.scryfall_bulk import sync_scryfall_bulk
+from services.market_signals import scan_snapshot_buyouts
 
 
 LOGGER = logging.getLogger("magic_nexus.monitor")
@@ -101,6 +102,23 @@ def run_once():
                 )
         except Exception:
             LOGGER.exception("Échec de la mise à jour des prix watchlist.")
+    try:
+        for alert in scan_snapshot_buyouts([*collection, *watchlist]):
+            if not _notification_allowed("price"):
+                continue
+            description = (
+                f"Score {alert['score']}/100 · variation {alert['price_change_pct']:+.1f} % "
+                f"sur {alert['window_days']} j · confiance {alert['confidence']:.0%}.\n"
+                f"{alert['reason']}"
+            )
+            notifications_sent += _notify_once(
+                alert["alert_id"],
+                f"[SUSPICION ANTI-BUYOUT] {alert['card_name']}",
+                description,
+                sent_alerts,
+            )
+    except Exception:
+        LOGGER.exception("Échec de l’analyse proxy anti-buyout.")
 
     intelligence_result = scan_spoilers_and_trends(watchlist, collection)
     for alert in intelligence_result["alerts"]:

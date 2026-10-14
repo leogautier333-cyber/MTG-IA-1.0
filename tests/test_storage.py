@@ -104,6 +104,11 @@ class StorageTests(unittest.TestCase):
         storage.record_price_snapshot(
             "card-1", 2.5, observed_at="2026-10-14T12:00:00+00:00"
         )
+        storage.sync_bulk_prints([{
+            "id": "card-1", "oracle_id": "oracle-1", "name": "Card",
+            "set": "set1", "released_at": "2020-01-01", "legalities": {},
+            "edhrec_rank": 1200,
+        }], synced_at="2026-10-14T12:00:00+00:00")
         storage.record_source_health("scryfall", True, "ok")
         storage.record_alert("alert-1", "BUY_SIGNAL", "card-1", "2026-10-14T00:00:00+00:00", {
             "reference_price": 2.5,
@@ -119,6 +124,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(len(storage.get_collection()), 1)
         self.assertEqual(len(storage.get_watchlist()), 1)
         self.assertEqual(storage.get_price_history()["card-1"]["2026-10-14"]["eur"], 2.5)
+        self.assertEqual(storage.get_edhrec_history("card-1")[-1]["edhrec_rank"], 1200)
         self.assertTrue(storage.get_source_health()["scryfall"]["succeeded"])
         self.assertEqual(storage.get_alerts_for_evaluation()[0]["alert_id"], "alert-1")
 

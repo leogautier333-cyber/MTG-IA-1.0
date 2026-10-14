@@ -2,11 +2,11 @@ import streamlit as st
 
 import data_manager
 from modules.local_assistant import answer_local_query
-from modules.market_analyzer import analyze_buyout_signal, portfolio_summary
-from services.market_monitor import get_watchlist_observations, refresh_watchlist_prices
+from modules.market_analyzer import portfolio_summary
+from services.market_monitor import refresh_watchlist_prices
 from services.source_health import get_source_statuses
 from services.backtesting import backtest_price_threshold, evaluate_alerts
-from services.market_signals import calculate_reprint_risk
+from services.market_signals import analyze_snapshot_buyout, calculate_reprint_risk
 from services.deck_importer import analyze_decklist, fetch_decklist
 from services.spoiler_watcher import scan_spoilers_and_trends
 
@@ -93,23 +93,40 @@ def render_nexus_tab():
 
     st.subheader("Sentinelle anti-buyout")
     st.info(
-        "Les snapshots Scryfall ne comprennent pas les volumes de ventes Cardmarket. "
-        "Une hausse de prix seule est donc classée comme indéterminée, jamais comme buyout confirmé."
+        "Indice proxy calculé à partir des snapshots de prix, des événements Scryfall "
+        "et de l’évolution du rang EDHREC. Ce score signale une anomalie, pas une preuve de manipulation."
     )
-    observations = get_watchlist_observations(watchlist)
-    cards_with_snapshots = [
-        (card, observations.get((
-            card.get("scryfall_id"), bool(card.get("foil")),
-            str(card.get("language", "FR")), str(card.get("condition", "NM")),
-        ), []))
-        for card in watchlist
-        if card.get("scryfall_id") and len(observations.get(card.get("scryfall_id"), [])) >= 2
-    ]
-    if not cards_with_snapshots:
-        st.caption("Deux snapshots de prix sont nécessaires avant d’évaluer une variation; les volumes de vente restent indisponibles.")
-    for card, points in cards_with_snapshots:
-        buyout_check = analyze_buyout_signal([point["price_eur"] for point in points])
-        st.caption(f"{card.get('name', 'Carte')} · {buyout_check['status']} · {buyout_check['reason']}")
+    tracked_variants = {}
+    for card in [*watchlist, *collection]:
+        scryfall_id = card.get("scryfall_id")
+        if not scryfall_id:
+            continue
+        variant_key = (
+            scryfall_id, bool(card.get("foil")), card.get("language", "FR"),
+            card.get("condition", "NM"),
+        )
+        tracked_variants.setdefault(variant_key, card)
+    buyout_rows = []
+    for card in tracked_variants.values():
+        result = analyze_snapshot_buyout(
+            card["scryfall_id"], foil=card.get("foil", False),
+            language=card.get("language", "FR"), condition=card.get("condition", "NM"),
+        )
+        buyout_rows.append({
+            "Carte": card.get("name", "Carte"),
+            "Indice": result.get("status", "INSUFFICIENT_DATA"),
+            "Score": result.get("score"),
+            "Variation 7 j": (
+                f"{result['price_change_pct']:+.1f} %"
+                if result.get("price_change_pct") is not None else "n/d"
+            ),
+            "Rang EDHREC": result.get("edhrec_rank", "n/d"),
+            "Analyse": result["reason"],
+        })
+    if buyout_rows:
+        st.dataframe(buyout_rows, hide_index=True, use_container_width=True)
+    else:
+        st.caption("Aucune variante de collection ou de watchlist à analyser.")
 
     st.subheader("Évaluation des signaux")
     if st.button("Évaluer les alertes échues", key="nexus_evaluate_alerts"):

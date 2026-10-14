@@ -18,7 +18,9 @@ Lancer la veille persistante avec `python -m services.monitor_worker`. Les état
 
 ## Signaux et portefeuille
 
-Les risques de réimpression n’affichent un rendement historique à +30/+90 jours que si les snapshots et les événements Bulk correspondants existent. Les changements de prix seuls ne confirment pas une manipulation ; le score proxy requiert des données d’annonces/vendeurs qui ne sont pas fournies par Scryfall.
+Le risque de réimpression combine le flag Reserved List, l’âge de la dernière sortie Scryfall, les intervalles observés entre éditions et, si disponibles, les rendements de prix à +30/+90 jours après les réimpressions.
+
+L’indice anti-buyout n’utilise aucune API Cardmarket : il compare un spike sur sept jours aux snapshots SQLite, mesure son écart à la volatilité récente, puis neutralise le score si un changement de légalité ou une réimpression est détecté sur la période. Le rang `edhrec_rank` du Bulk est historisé quotidiennement ; son amélioration récente peut qualifier la hausse de soutenue par l’adoption Commander. Un rang élevé seul indique une popularité, pas une accélération de demande. Ce score est une alerte heuristique, jamais une preuve de manipulation ni une mesure de volume vendu.
 
 Les métriques de portefeuille utilisent les snapshots disponibles et retombent sur le prix de vente configuré si l’impression n’a pas d’historique. Les frais Cardmarket (5 % par défaut), frais d’envoi et décotes par état sont des paramètres estimatifs à ajuster à la transaction réelle.
 

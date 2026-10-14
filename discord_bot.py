@@ -4,6 +4,8 @@ from pathlib import Path
 
 import requests
 import data_manager
+from services.discord_interactions import run_bot
+from services.source_health import get_source_statuses
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 PREDICTIONS_FILE = Path(__file__).resolve().parent / "data" / "ai_predictions.json"
@@ -59,6 +61,20 @@ def notify_daily_summary():
         )
         return
 
+    source_issues = [
+        f"{source}: {status['status']}"
+        for source, status in get_source_statuses().items()
+        if status["status"] != "HEALTHY"
+    ]
+    if source_issues:
+        send_discord_alert(
+            "⚠️ Rapport quotidien partiel - sources à vérifier",
+            "_Sources indisponibles ou trop anciennes : " + ", ".join(source_issues) + "._",
+            16744192,
+        )
+
+    if not predictions and source_issues:
+        return
     if not predictions:
         send_discord_alert(
             "📅 Rapport Quotidien - Magic Trading & Profit Manager",
@@ -84,6 +100,8 @@ def notify_daily_summary():
 
 
 if __name__ == "__main__":
-    notify_daily_summary()
-    # Test forcé
+    if os.getenv("DISCORD_BOT_TOKEN"):
+        run_bot()
+    else:
+        notify_daily_summary()
     

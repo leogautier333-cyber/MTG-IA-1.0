@@ -10,7 +10,6 @@ import scryfall
 
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-PRICE_HISTORY_FILE = DATA_DIR / "price_history.json"
 PREDICTIONS_FILE = DATA_DIR / "ai_predictions.json"
 
 
@@ -48,7 +47,19 @@ def _prediction_id(category, scryfall_id, timestamp_key):
     return f"pred_{category.lower()}_{scryfall_id}_{timestamp_key}"
 
 
-def _create_market_predictions(collection, watchlist, price_history, now):
+def _variant_history(card):
+    foil = bool(card.get("foil"))
+    price_key = "eur_foil" if foil else "eur"
+    return {
+        point["snapshot_date"]: {price_key: point["price_eur"]}
+        for point in data_manager.storage.get_variant_price_history(
+            card.get("scryfall_id"), foil, card.get("language", "FR"),
+            card.get("condition", "NM"),
+        )
+    }
+
+
+def _create_market_predictions(collection, watchlist, now):
     existing_predictions = _read_json(PREDICTIONS_FILE, [])
     if not isinstance(existing_predictions, list):
         existing_predictions = []
@@ -65,7 +76,7 @@ def _create_market_predictions(collection, watchlist, price_history, now):
         card_id = item.get("scryfall_id")
         if not card_id:
             continue
-        history = price_history.get(card_id, {})
+        history = _variant_history(item)
         dates = sorted(history)
         if len(dates) < 2:
             continue
@@ -95,6 +106,10 @@ def _create_market_predictions(collection, watchlist, price_history, now):
                 "suggested_action": "RAISE_PRICE",
                 "confidence_score": 0.85,
                 "target_price": round(latest_price * 1.1, 2),
+                "reference_price": latest_price,
+                "foil": bool(item.get("foil")),
+                "language": item.get("language", "FR"),
+                "condition": item.get("condition", "NM"),
                 "ban_risk_level": "LOW",
                 "reprint_risk_level": "LOW",
                 "reasoning": (
@@ -116,7 +131,7 @@ def _create_market_predictions(collection, watchlist, price_history, now):
         ):
             continue
 
-        history = price_history.get(card_id, {})
+        history = _variant_history(item)
         dates = sorted(history)
         if len(dates) < 2:
             continue
@@ -144,6 +159,10 @@ def _create_market_predictions(collection, watchlist, price_history, now):
                 "suggested_action": "CONSIDER_BUYING",
                 "confidence_score": 0.75,
                 "target_price": latest_price,
+                "reference_price": latest_price,
+                "foil": bool(item.get("foil")),
+                "language": item.get("language", "FR"),
+                "condition": item.get("condition", "NM"),
                 "ban_risk_level": "UNKNOWN",
                 "reprint_risk_level": "UNKNOWN",
                 "reasoning": (
@@ -162,25 +181,27 @@ def analyze_market_and_predict():
     """Actualise les prix suivis, détecte les mouvements et persiste les alertes."""
     collection = data_manager.get_collection()
     watchlist = data_manager.get_watchlist()
-    price_history = _read_json(PRICE_HISTORY_FILE, data_manager.get_price_history())
-    if not isinstance(price_history, dict):
-        price_history = {}
-
     tracked_cards = {}
     for card in [*collection, *watchlist]:
         card_id = card.get("scryfall_id")
         if card_id:
-            tracked_cards.setdefault(card_id, card)
+            variant = (
+                bool(card.get("foil")),
+                str(card.get("language", "FR")),
+                str(card.get("condition", "NM")),
+            )
+            tracked_cards.setdefault(card_id, set()).add(variant)
 
     timestamp = datetime.now()
-    timestamp_key = timestamp.strftime("%Y-%m-%d_%Hh")
     updated_count = 0
     card_ids = list(tracked_cards)
     if card_ids:
         try:
             updated_cards = scryfall.get_cards_batch(card_ids)
+            data_manager.storage.record_source_health("scryfall", True)
         except requests.RequestException as error:
             print(f"Impossible d'actualiser les prix Scryfall : {error}")
+            data_manager.storage.record_source_health("scryfall", False, str(error))
             updated_cards = []
 
         for card_data in updated_cards:
@@ -193,26 +214,29 @@ def analyze_market_and_predict():
             if eur is None and eur_foil is None:
                 continue
 
-            card_history = price_history.setdefault(card_id, {})
-            point = card_history.setdefault(timestamp_key, {})
-            if eur is not None:
-                point["eur"] = eur
-            if eur_foil is not None:
-                point["eur_foil"] = eur_foil
-            updated_count += 1
-
-        if updated_count:
-            _write_json_atomic(PRICE_HISTORY_FILE, price_history)
+            for foil, language, condition in tracked_cards.get(card_id, set()):
+                price = eur_foil if foil else eur
+                if price is None:
+                    continue
+                data_manager.record_price_snapshot(
+                    card_id, price, foil=foil, language=language, condition=condition,
+                    observed_at=timestamp.isoformat(timespec="seconds"),
+                )
+                updated_count += 1
     else:
         print("Aucune carte avec un identifiant Scryfall à analyser.")
 
     predictions = _create_market_predictions(
         collection,
         watchlist,
-        price_history,
         timestamp,
     )
     if predictions:
+        for prediction in predictions:
+            data_manager.storage.record_alert(
+                prediction["prediction_id"], prediction["category"],
+                prediction["scryfall_id"], prediction["timestamp"], prediction,
+            )
         saved_predictions = _read_json(PREDICTIONS_FILE, [])
         if not isinstance(saved_predictions, list):
             saved_predictions = []

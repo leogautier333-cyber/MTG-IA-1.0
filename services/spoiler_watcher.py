@@ -1,10 +1,13 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 import re
 import time
 import xml.etree.ElementTree as ET
 
 import requests
+
+from database import storage
+from services.market_signals import extract_market_events
 
 
 SCRYFALL_API = "https://api.scryfall.com"
@@ -194,6 +197,7 @@ def analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, o
                 "id": f"spoiler:{spoiler.get('id') or spoiler.get('set_code')}:{card.get('scryfall_id') or card['name']}",
                 "category": "SPOILER_REPRINT",
                 "card_name": card["name"],
+                "scryfall_id": card.get("scryfall_id"),
                 "scope": scope,
                 "title": spoiler.get("name", "Réimpression détectée"),
                 "set_name": spoiler.get("set_name", "Extension à venir"),
@@ -233,6 +237,7 @@ def analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, o
             "id": f"reddit:{first_post.get('url') or key}:{key}",
             "category": "REDDIT_HYPE",
             "card_name": name,
+            "scryfall_id": key if not key.startswith(("Collection:", "Watchlist:")) else None,
             "scope": scope,
             "title": first_post.get("title", "Discussion r/mtgfinance"),
             "count": count,
@@ -274,6 +279,23 @@ def scan_spoilers_and_trends(watchlist, collection, session=requests, max_sets=6
     except (requests.RequestException, ET.ParseError) as error:
         errors.append(f"Reddit r/mtgfinance: {error}")
 
+    scryfall_errors = [error for error in errors if error.startswith("Scryfall")]
+    reddit_errors = [error for error in errors if error.startswith("Reddit")]
+    storage.record_source_health(
+        "scryfall", not scryfall_errors, "; ".join(scryfall_errors)
+    )
+    storage.record_source_health("reddit", not reddit_errors, "; ".join(reddit_errors))
+
     result = analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, oracle_by_id)
     result["errors"] = errors
+    tracked = [*watchlist, *collection]
+    result["events"] = extract_market_events(reddit_posts, tracked)
+    checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    for alert in result["alerts"]:
+        storage.record_alert(
+            alert["id"], alert["category"], alert.get("scryfall_id"), checked_at, alert
+        )
+    for event in result["events"]:
+        event_id = f"community:{event['event_type']}:{event.get('scryfall_id')}:{event.get('source_url')}"
+        storage.record_alert(event_id, event["event_type"], event.get("scryfall_id"), checked_at, event)
     return result

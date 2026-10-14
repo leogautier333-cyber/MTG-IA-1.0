@@ -1,54 +1,33 @@
-import json
-import os
 from datetime import datetime
 import streamlit as st
 
-# Chemins absolus basés sur l'emplacement exact du fichier
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-COLLECTION_FILE = os.path.join(DATA_DIR, "collection.json")
-WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
-PRICE_HIST_FILE = os.path.join(DATA_DIR, "price_history.json")
-REQUIRED_COLLECTION_FIELDS = {"scryfall_id", "name", "set_code", "purchase_price", "selling_price"}
+from database import storage
 
-def _ensure_data_dir():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR, exist_ok=True)
+REQUIRED_COLLECTION_FIELDS = {"scryfall_id", "name", "set_code", "purchase_price", "selling_price"}
 
 @st.cache_data(ttl=60)
 def get_collection():
-    _ensure_data_dir()
-    if not os.path.exists(COLLECTION_FILE):
-        return []
     try:
-        with open(COLLECTION_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        return storage.get_collection()
     except Exception as e:
         print(f"Erreur lecture collection: {e}")
         return []
 
 def save_collection(collection):
-    _ensure_data_dir()
-    with open(COLLECTION_FILE, "w", encoding="utf-8") as f:
-        json.dump(collection, f, ensure_ascii=False, indent=2)
+    storage.save_collection(collection)
+    st.cache_data.clear()
 
 def replace_collection(collection):
     """Remplace le stock après validation, puis invalide le cache Streamlit."""
     if not is_valid_collection(collection):
         return False
 
-    _ensure_data_dir()
-    temp_file = f"{COLLECTION_FILE}.tmp"
     try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(collection, f, ensure_ascii=False, indent=2)
-        os.replace(temp_file, COLLECTION_FILE)
+        storage.save_collection(collection)
         st.cache_data.clear()
         return True
     except Exception as e:
         print(f"Erreur lors du remplacement de la collection : {e}")
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
         return False
 
 def is_valid_collection(collection):
@@ -127,21 +106,20 @@ def calculate_net_margin(selling_price, purchase_price, shipping=0.0, cm_fee_pct
     }
 
 def get_watchlist():
-    _ensure_data_dir()
-    if not os.path.exists(WATCHLIST_FILE):
-        return []
     try:
-        with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        return storage.get_watchlist()
+    except Exception as e:
+        print(f"Erreur lecture watchlist: {e}")
         return []
 
+def save_watchlist(watchlist):
+    storage.save_watchlist(watchlist)
+    st.cache_data.clear()
+
 def get_price_history():
-    _ensure_data_dir()
-    if not os.path.exists(PRICE_HIST_FILE):
-        return {}
-    try:
-        with open(PRICE_HIST_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return storage.get_price_history()
+
+def record_price_snapshot(scryfall_id, price, foil=False, language="FR", condition="NM", observed_at=None):
+    return storage.record_price_snapshot(
+        scryfall_id, price, foil, language, condition, observed_at
+    )

@@ -1,11 +1,45 @@
 import re
+import os
+import requests
 
-from modules.market_analyzer import portfolio_summary, suggest_exchange_lot
+from agents.tools import execute_tool
+from agents.tool_agent import ToolCallingAgent
+from modules.market_analyzer import suggest_exchange_lot
 
 
 def answer_local_query(query, collection, watchlist):
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            return ToolCallingAgent().answer(query)
+        except (requests.RequestException, RuntimeError, ValueError):
+            pass
+
     text = query.casefold()
-    summary = portfolio_summary(collection)
+    collection_result = execute_tool("query_collection", {"query": "", "include_sold": True})
+    summary = collection_result["portfolio"]
+
+    if any(word in text for word in ("réimpression", "reprint")):
+        card = next((card for card in collection if card.get("name", "").casefold() in text), None)
+        if not card:
+            return "Indique le nom d'une carte de ta collection pour consulter son risque de réimpression."
+        risk = execute_tool("calculate_reprint_risk", {"scryfall_id": card["scryfall_id"]})
+        if risk.get("score") is None:
+            return risk["reason"]
+        historical = risk.get("expected_change_30d_pct")
+        estimate = f" Impact historique à 30 j : {historical:.1f} %." if historical is not None else " Aucun échantillon historique à 30/90 j."
+        return f"Risque {risk['status']} ({risk['score']}/100), confiance {risk['confidence']:.0%}.{estimate} {risk['reason']}"
+
+    if "historique" in text or "évolution" in text:
+        card = next((card for card in collection if card.get("name", "").casefold() in text), None)
+        if card:
+            history = execute_tool("get_price_history", {
+                "scryfall_id": card["scryfall_id"], "foil": card.get("foil", False),
+                "language": card.get("language", "FR"), "condition": card.get("condition", "NM"),
+            })
+            if history["snapshots"]:
+                latest = history["snapshots"][-1]
+                return f"Dernier snapshot {latest['observed_at']} : {latest['price_eur']:.2f} €."
+            return "Aucun snapshot de prix enregistré pour cette variante."
 
     if any(word in text for word in ("watchlist", "surveill", "suivies")):
         if not watchlist:

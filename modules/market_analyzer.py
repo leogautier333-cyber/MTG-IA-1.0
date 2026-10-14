@@ -1,38 +1,9 @@
 from itertools import combinations
 
+from services.portfolio_analytics import portfolio_summary as _portfolio_summary
 
 def portfolio_summary(collection):
-    for_sale = [card for card in collection if card.get("status") == "FOR_SALE"]
-    sold = [card for card in collection if card.get("status") == "SOLD"]
-    invested = sum(
-        float(card.get("purchase_price") or 0) * int(card.get("quantity") or 1)
-        for card in sold
-    )
-    realized = sum(
-        (
-            float(card.get("actual_sale_price") or 0) * 0.95
-            - float(card.get("purchase_price") or 0)
-        ) * int(card.get("quantity") or 1)
-        for card in sold
-    )
-    return {
-        "stock_value": sum(
-            float(card.get("selling_price") or 0) * int(card.get("quantity") or 1)
-            for card in for_sale
-        ),
-        "invested_capital": sum(
-            float(card.get("purchase_price") or 0) * int(card.get("quantity") or 1)
-            for card in for_sale
-        ),
-        "turnover": sum(
-            float(card.get("actual_sale_price") or 0) * int(card.get("quantity") or 1)
-            for card in sold
-        ),
-        "realized_profit": realized,
-        "realized_roi_pct": realized / invested * 100 if invested else 0.0,
-        "for_sale_count": len(for_sale),
-        "sold_count": len(sold),
-    }
+    return _portfolio_summary(collection)
 
 
 def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15.0):
@@ -42,7 +13,11 @@ def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15
         card_id = card.get("scryfall_id")
         if not card_id or card_id in owned_ids:
             continue
-        history = observations.get(card_id, [])
+        variant_key = (
+            card_id, bool(card.get("foil")), str(card.get("language", "FR")),
+            str(card.get("condition", "NM")),
+        )
+        history = observations.get(variant_key, observations.get(card_id, []))
         if len(history) < 2:
             continue
         previous = history[-2].get("price_eur")
@@ -53,6 +28,10 @@ def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15
         if change_pct <= -abs(threshold_pct):
             alerts.append({
                 "name": card.get("name", "Carte inconnue"),
+                "scryfall_id": card_id,
+                "foil": bool(card.get("foil")),
+                "language": card.get("language", "FR"),
+                "condition": card.get("condition", "NM"),
                 "previous_price": previous,
                 "current_price": current,
                 "change_pct": change_pct,

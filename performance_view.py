@@ -3,6 +3,7 @@ import plotly.express as px
 import streamlit as st
 
 import data_manager
+from services.portfolio_analytics import analyze_portfolio, simulate_sale, suggest_arbitrage
 
 
 def render_performance_tab():
@@ -15,23 +16,20 @@ def render_performance_tab():
     for_sale_cards = [c for c in collection if c.get("status") == "FOR_SALE"]
     sold_cards = [c for c in collection if c.get("status") == "SOLD"]
 
-    total_value = sum(float(c.get("selling_price", 0)) * int(c.get("quantity", 1)) for c in for_sale_cards)
-    total_invested = sum(float(c.get("purchase_price", 0)) * int(c.get("quantity", 1)) for c in for_sale_cards)
-    turnover = sum(float(c.get("actual_sale_price", 0) or 0.0) * int(c.get("quantity", 1)) for c in sold_cards)
-    total_net_profit = sum(
-        data_manager.calculate_net_margin(
-            c.get("actual_sale_price", 0), c.get("purchase_price", 0)
-        )["net_profit"] * c.get("quantity", 1)
-        for c in sold_cards
-    )
+    analytics = analyze_portfolio(collection)
+    total_value = analytics["stock_value"]
+    total_invested = analytics["invested_capital"]
+    turnover = analytics["turnover"]
+    total_net_profit = analytics["realized_profit"]
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Valeur du Stock", f"{total_value:.2f} €")
     col2.metric("Capital Investi", f"{total_invested:.2f} €")
     col3.metric("Chiffre d'Affaires", f"{turnover:.2f} €")
     col4.metric("Bénéfice Net Cumulé", f"{total_net_profit:.2f} €", delta=f"{total_net_profit:.2f} €")
+    col5.metric("P&L latent", f"{analytics['unrealized_profit']:.2f} €", delta=f"ROI {analytics['unrealized_roi_pct']:.1f} %")
 
-    roi_global = (total_net_profit / total_invested * 100) if total_invested else 0.0
+    roi_global = analytics["realized_roi_pct"]
 
     stock_history_rows = []
     for card in collection:
@@ -47,10 +45,12 @@ def render_performance_tab():
     for sold_card in sold_cards:
         sold_date = pd.to_datetime(sold_card.get("date_sold"), errors="coerce")
         if pd.notna(sold_date):
-            unit_profit = data_manager.calculate_net_margin(
+            unit_profit = simulate_sale(
+                sold_card,
                 sold_card.get("actual_sale_price", 0),
-                sold_card.get("purchase_price", 0)
-            )["net_profit"]
+                shipping=sold_card.get("sale_shipping") or 0,
+                condition_discount_pct=0.0,
+            )["profit_per_card"]
             sold_history_rows.append({
                 "Date": sold_date.normalize(),
                 "Indicateur": "Bénéfice cumulé",
@@ -124,3 +124,51 @@ def render_performance_tab():
                 "Valeur": st.column_config.TextColumn("Valeur", width="medium")
             }
         )
+
+    st.subheader("Risque et détention")
+    risk_columns = st.columns(3)
+    risk_columns[0].metric("Concentration top 10", f"{analytics['top_ten_concentration_pct']:.1f} %")
+    risk_columns[1].metric("Indice de liquidité", f"{analytics['liquidity_index']:.0f}/100")
+    risk_columns[2].metric("Détention moyenne", f"{analytics['average_holding_days']:.0f} jours")
+    if analytics["by_set"]:
+        st.dataframe(
+            [{"Édition": name, "P&L": f"{values['profit']:.2f} €", "ROI": f"{values['roi_pct']:.1f} %"}
+             for name, values in analytics["by_set"].items()],
+            hide_index=True,
+            use_container_width=True,
+        )
+    arbitrage = suggest_arbitrage(collection)
+    if arbitrage:
+        st.subheader("Arbitrage entre éditions")
+        st.dataframe(
+            [{
+                "Carte": item["card_name"],
+                "Vendre": item["sell_set"],
+                "Racheter": item["buy_set"],
+                "Qté": item["quantity"],
+                "Écart indicatif": f"{item['estimated_spread_eur']:.2f} €",
+            } for item in arbitrage],
+            hide_index=True,
+            use_container_width=True,
+        )
+        st.caption(arbitrage[0]["source"])
+
+    if for_sale_cards:
+        st.subheader("Simulation de revente nette")
+        selected_sale = st.selectbox(
+            "Carte", range(len(for_sale_cards)),
+            format_func=lambda index: f"{for_sale_cards[index].get('name', 'Carte')} · {for_sale_cards[index].get('set_code', '')}",
+            key="performance_sale_card",
+        )
+        sale_card = for_sale_cards[selected_sale]
+        sale_price = st.number_input(
+            "Prix brut estimé par carte (€)", min_value=0.0,
+            value=float(sale_card.get("selling_price") or 0), step=0.5,
+            key="performance_sale_price",
+        )
+        shipping = st.number_input(
+            "Port à ta charge par carte (€)", min_value=0.0, value=0.0,
+            step=0.25, key="performance_sale_shipping",
+        )
+        sale_result = simulate_sale(sale_card, sale_price, shipping=shipping)
+        st.metric("Produit net estimé", f"{sale_result['net_total']:.2f} €", delta=f"P&L {sale_result['profit_total']:.2f} € · ROI {sale_result['roi_pct']:.1f} %")

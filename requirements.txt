@@ -2,3 +2,5 @@ streamlit
 pandas
 plotly
 requests
+ijson
+discord.py>=2.3

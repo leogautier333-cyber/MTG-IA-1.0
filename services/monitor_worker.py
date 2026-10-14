@@ -2,19 +2,35 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
 import data_manager
 from services.market_monitor import refresh_watchlist_prices
+from services.backtesting import evaluate_alerts
+from services.source_health import get_source_statuses
 from services.spoiler_watcher import scan_spoilers_and_trends
+from services.scryfall_bulk import sync_scryfall_bulk
 
 
 LOGGER = logging.getLogger("magic_nexus.monitor")
 POLL_INTERVAL_SECONDS = max(300, int(os.getenv("NEXUS_POLL_INTERVAL_SECONDS", "3600")))
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 ALERT_STATE_FILE = Path(__file__).resolve().parents[1] / "data" / "nexus_alert_state.json"
+SEVERITY_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+
+
+def _notification_allowed(category):
+    minimum = os.getenv("NEXUS_MIN_ALERT_SEVERITY", "LOW").upper()
+    minimum_level = SEVERITY_ORDER.get(minimum, SEVERITY_ORDER["LOW"])
+    category_level = {
+        "price": SEVERITY_ORDER["MEDIUM"],
+        "spoiler": SEVERITY_ORDER["HIGH"],
+        "reddit": SEVERITY_ORDER["LOW"],
+    }.get(category, SEVERITY_ORDER["MEDIUM"])
+    return category_level >= minimum_level
 
 
 def _read_sent_alerts():
@@ -57,37 +73,75 @@ def run_once():
     sent_alerts = _read_sent_alerts()
     notifications_sent = 0
 
-    if watchlist:
-        market_result = refresh_watchlist_prices(watchlist, collection)
-        for alert in market_result["alerts"]:
-            alert_key = (
-                f"price:{alert['name']}:{alert['previous_price']:.4f}:"
-                f"{alert['current_price']:.4f}"
-            )
-            notifications_sent += _notify_once(
-                alert_key,
-                f"[OPPORTUNITÉ ACHAT] {alert['name']}",
-                f"Baisse de {alert['change_pct']:.1f}% sur {alert['currency_source']} "
-                f"({alert['previous_price']:.2f} € → {alert['current_price']:.2f} €).",
-                sent_alerts,
-            )
+    today = datetime.now(timezone.utc).date().isoformat()
+    if data_manager.storage.get_metadata("scryfall_bulk_checked_date") != today:
+        try:
+            bulk_result = sync_scryfall_bulk()
+            data_manager.storage.set_metadata("scryfall_bulk_checked_date", today)
+            LOGGER.info("Synchronisation Bulk Scryfall: %s.", bulk_result["status"])
+        except Exception:
+            LOGGER.exception("Échec de synchronisation Bulk Scryfall.")
 
-        intelligence_result = scan_spoilers_and_trends(watchlist, collection)
-        for alert in intelligence_result["alerts"]:
-            alert_key = alert["id"]
-            description = alert["message"]
-            if alert.get("source_url"):
-                description = f"{description}\n{alert['source_url']}"
-            notifications_sent += _notify_once(
+    if watchlist:
+        try:
+            market_result = refresh_watchlist_prices(watchlist, collection)
+            for alert in market_result["alerts"]:
+                if not _notification_allowed("price"):
+                    continue
+                alert_key = (
+                    f"price:{alert['scryfall_id']}:{alert['foil']}:"
+                    f"{alert['previous_price']:.4f}:{alert['current_price']:.4f}"
+                )
+                notifications_sent += _notify_once(
+                    alert_key,
+                    f"[OPPORTUNITÉ ACHAT] {alert['name']}",
+                    f"Baisse de {alert['change_pct']:.1f}% sur {alert['currency_source']} "
+                    f"({alert['previous_price']:.2f} € → {alert['current_price']:.2f} €).",
+                    sent_alerts,
+                )
+        except Exception:
+            LOGGER.exception("Échec de la mise à jour des prix watchlist.")
+
+    intelligence_result = scan_spoilers_and_trends(watchlist, collection)
+    for alert in intelligence_result["alerts"]:
+        category_level = "spoiler" if "SPOILER" in alert.get("category", "") else "reddit"
+        if not _notification_allowed(category_level):
+            continue
+        alert_key = alert["id"]
+        description = alert["message"]
+        if alert.get("source_url"):
+            description = f"{description}\n{alert['source_url']}"
+        notifications_sent += _notify_once(
+            alert_key,
+            f"Nexus · {alert['category']} · {alert['card_name']}",
+            description,
+            sent_alerts,
+        )
+    for error in intelligence_result["errors"]:
+        LOGGER.warning("Source de veille indisponible: %s", error)
+
+    for source, health in get_source_statuses().items():
+        if health["status"] in {"FAILED", "STALE"}:
+            alert_key = f"source:{source}:{health['status']}:{datetime.now(timezone.utc).date().isoformat()}"
+            data_manager.storage.record_alert(
+                alert_key, "SYSTEM_SOURCE", None,
+                datetime.now(timezone.utc).isoformat(timespec="seconds"), health,
+            )
+            _notify_once(
                 alert_key,
-                f"Nexus · {alert['category']} · {alert['card_name']}",
-                description,
+                f"[SYSTÈME] Source {source} {health['status']}",
+                health.get("details") or "Aucune donnée fraîche disponible.",
                 sent_alerts,
             )
-        for error in intelligence_result["errors"]:
-            LOGGER.warning("Source de veille indisponible: %s", error)
+        elif health["status"] == "UNKNOWN":
+            LOGGER.warning("Source non vérifiée: %s", source)
 
     _write_sent_alerts(sent_alerts)
+    try:
+        evaluation_result = evaluate_alerts()
+        LOGGER.info("Évaluations de signaux enregistrées: %d.", evaluation_result["evaluations_written"])
+    except Exception:
+        LOGGER.exception("Échec de l'évaluation des alertes arrivées à échéance.")
     LOGGER.info("Cycle terminé; %d notification(s) envoyée(s).", notifications_sent)
     return notifications_sent
 

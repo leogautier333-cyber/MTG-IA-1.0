@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from database import storage
 from database.backup import create_backup, restore_backup
+from database.healthcheck import check_database
 
 
 class StorageTests(unittest.TestCase):
@@ -15,6 +16,11 @@ class StorageTests(unittest.TestCase):
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
         self.addCleanup(self.temporary_directory.cleanup)
+
+    def test_healthcheck_initializes_every_required_table(self):
+        result = check_database()
+        self.assertEqual(result["backend"], "sqlite")
+        self.assertEqual(result["table_count"], len(storage.REQUIRED_TABLES))
 
     def test_legacy_json_is_migrated_and_daily_prices_are_upserted(self):
         legacy_data = {

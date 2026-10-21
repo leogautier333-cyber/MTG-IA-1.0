@@ -158,7 +158,7 @@ class WorkflowTests(unittest.TestCase):
         finding = analyze_snapshot_buyout("spec-card", today=date(2026, 10, 14))
         alerts = scan_snapshot_buyouts([{
             "scryfall_id": "spec-card", "name": "Spec Card", "status": "FOR_SALE",
-        }])
+        }], today=date(2026, 10, 14))
 
         self.assertIn(finding["status"], {"SUSPICIOUS", "HIGH_SUSPICION"})
         self.assertGreaterEqual(finding["score"], 60)

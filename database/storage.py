@@ -6,6 +6,7 @@ import threading
 from contextlib import closing, contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 PROJECT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -13,6 +14,38 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
+
+REQUIRED_TABLES = frozenset({
+    "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
+    "alerts", "alert_evaluations", "bulk_prints", "card_demand_snapshots",
+})
+
+
+class DatabaseConfigurationError(RuntimeError):
+    """Raised when a requested database backend is missing or misconfigured."""
+
+
+class DatabaseConnectionError(RuntimeError):
+    """Raised when a configured database cannot be reached or initialized."""
+
+
+def _is_github_actions():
+    return os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+
+
+def _configured_database_url():
+    return os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL") or DATABASE_URL
+
+
+def get_database_backend():
+    if _configured_database_url():
+        return "postgres"
+    if _is_github_actions():
+        raise DatabaseConfigurationError(
+            "DATABASE_URL is required in GitHub Actions; refusing to use ephemeral SQLite. "
+            "Configure a PostgreSQL URI as the DATABASE_URL Actions secret."
+        )
+    return "sqlite"
 
 
 class _DatabaseConnection:
@@ -52,16 +85,49 @@ class _DatabaseConnection:
 
 
 def _connect():
-    if DATABASE_URL:
-        import psycopg
-        from psycopg.rows import dict_row
+    database_url = _configured_database_url()
+    if database_url:
+        try:
+            parsed_url = urlsplit(database_url)
+            if parsed_url.scheme not in {"postgres", "postgresql"} or not parsed_url.hostname or not parsed_url.path.strip("/"):
+                raise DatabaseConfigurationError(
+                    "DATABASE_URL must be a PostgreSQL URI containing a host and database name."
+                )
+        except ValueError:
+            raise DatabaseConfigurationError(
+                "DATABASE_URL is not a valid PostgreSQL URI; check its encoding and port."
+            ) from None
 
-        connection = psycopg.connect(
-            DATABASE_URL,
-            row_factory=dict_row,
-            connect_timeout=15,
-        )
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError:
+            raise DatabaseConfigurationError(
+                "PostgreSQL is configured but psycopg is missing; install requirements.txt."
+            ) from None
+
+        try:
+            connection = psycopg.connect(
+                database_url,
+                row_factory=dict_row,
+                connect_timeout=15,
+                application_name="magic-trading-profit-manager",
+                sslmode=os.getenv("DATABASE_SSLMODE", "require"),
+            )
+        except Exception as error:
+            error_type = type(error).__name__
+            raise DatabaseConnectionError(
+                f"PostgreSQL connection failed ({error_type}) after a 15-second timeout. "
+                "Check the database host, network allow-list, credentials and TLS settings; "
+                "the connection string is intentionally omitted from this error."
+            ) from None
         return _DatabaseConnection(connection, "postgres")
+
+    if _is_github_actions():
+        raise DatabaseConfigurationError(
+            "DATABASE_URL is required in GitHub Actions; refusing to use ephemeral SQLite. "
+            "Configure a PostgreSQL URI as the DATABASE_URL Actions secret."
+        )
 
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=30)
@@ -195,7 +261,12 @@ def _import_legacy_price_history(connection, path):
 
 
 def initialize_database():
-    database_path = DATABASE_URL or str(DATABASE_PATH.resolve())
+    database_url = _configured_database_url()
+    if not database_url and _is_github_actions():
+        raise DatabaseConfigurationError(
+            "DATABASE_URL is required in GitHub Actions; refusing to initialize an ephemeral SQLite database."
+        )
+    database_path = database_url or str(DATABASE_PATH.resolve())
     if database_path in _INITIALIZED_PATHS:
         return
     with _INITIALIZATION_LOCK:
@@ -289,10 +360,10 @@ def initialize_database():
             CREATE INDEX IF NOT EXISTS card_demand_history_idx
                 ON card_demand_snapshots(scryfall_id, snapshot_date);
             """
-            if DATABASE_URL:
+            if database_url:
                 schema = schema.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
             connection.executescript(schema)
-            if DATABASE_URL:
+            if database_url:
                 bulk_columns = {
                     row["name"] for row in connection.execute(
                         """SELECT column_name AS name FROM information_schema.columns
@@ -303,9 +374,16 @@ def initialize_database():
                 bulk_columns = {
                     row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
                 }
-            for column_name in ("price_eur", "price_eur_foil", "edhrec_rank"):
+            column_types = {
+                "price_eur": "REAL",
+                "price_eur_foil": "REAL",
+                "edhrec_rank": "INTEGER",
+            }
+            for column_name, column_type in column_types.items():
                 if column_name not in bulk_columns:
-                    connection.execute(f"ALTER TABLE bulk_prints ADD COLUMN {column_name} REAL")
+                    connection.execute(
+                        f"ALTER TABLE bulk_prints ADD COLUMN {column_name} {column_type}"
+                    )
             _migrate_legacy_data(connection)
         _INITIALIZED_PATHS.add(database_path)
 

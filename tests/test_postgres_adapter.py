@@ -1,7 +1,11 @@
 import unittest
+import io
+import os
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 from database import storage
+from database.healthcheck import main as database_healthcheck
 
 
 class FakeCursor:
@@ -34,6 +38,38 @@ class FakeConnection:
 
 
 class PostgresAdapterTests(unittest.TestCase):
+    def test_missing_database_url_in_github_actions_fails_clearly(self):
+        with patch.object(storage, "DATABASE_URL", None), patch.dict(os.environ, {
+            "DATABASE_URL": "", "MTG_DATABASE_URL": "", "GITHUB_ACTIONS": "true",
+        }):
+            with self.assertRaisesRegex(storage.DatabaseConfigurationError, "DATABASE_URL is required"):
+                storage._connect()
+
+    def test_ci_healthcheck_stops_with_actionable_missing_secret_message(self):
+        error_output = io.StringIO()
+        with patch.object(storage, "DATABASE_URL", None), patch.dict(os.environ, {
+            "DATABASE_URL": "", "MTG_DATABASE_URL": "", "GITHUB_ACTIONS": "true",
+        }), redirect_stderr(error_output):
+            exit_code = database_healthcheck()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("DATABASE_URL is required", error_output.getvalue())
+
+    def test_invalid_database_url_is_rejected_without_echoing_secret(self):
+        with patch.object(storage, "DATABASE_URL", "not-a-postgresql-uri"), patch.dict(os.environ, {
+            "DATABASE_URL": "", "MTG_DATABASE_URL": "", "GITHUB_ACTIONS": "false",
+        }):
+            with self.assertRaisesRegex(storage.DatabaseConfigurationError, "PostgreSQL URI"):
+                storage._connect()
+
+    def test_postgres_connection_failure_is_actionable_and_does_not_leak_url(self):
+        secret_uri = "postgresql://user:supersecret@example.invalid/db"
+        with patch.object(storage, "DATABASE_URL", secret_uri), \
+             patch("psycopg.connect", side_effect=TimeoutError("socket timed out")):
+            with self.assertRaises(storage.DatabaseConnectionError) as raised:
+                storage._connect()
+        self.assertIn("15-second timeout", str(raised.exception))
+        self.assertNotIn("supersecret", str(raised.exception))
+
     def test_postgres_connection_uses_configured_dsn_and_named_rows(self):
         fake_connection = FakeConnection()
         with patch.object(storage, "DATABASE_URL", "postgresql://example.invalid/db"), \

@@ -239,7 +239,7 @@ def analyze_snapshot_buyout(scryfall_id, foil=False, language="FR", condition="N
     }
 
 
-def scan_snapshot_buyouts(cards, minimum_score=60):
+def scan_snapshot_buyouts(cards, minimum_score=60, today=None):
     findings = []
     now = datetime.now(timezone.utc)
     for card in cards:
@@ -251,6 +251,7 @@ def scan_snapshot_buyouts(cards, minimum_score=60):
             foil=card.get("foil", False),
             language=card.get("language", "FR"),
             condition=card.get("condition", "NM"),
+            today=today,
         )
         if signal.get("score") is None or signal["score"] < minimum_score:
             continue

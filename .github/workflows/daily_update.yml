@@ -23,15 +23,8 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Validate persistent database configuration
-        run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "DATABASE_URL is required. Configure it as a GitHub Actions secret pointing to PostgreSQL/Neon/Supabase."
-            exit 1
-          fi
-
-      - name: Initialize schema and migrate legacy JSON once
-        run: python -c "from database.storage import initialize_database; initialize_database()"
+      - name: Connect, initialize and validate PostgreSQL schema
+        run: python -m database.healthcheck
 
       - name: Synchronize Scryfall Bulk and market signals
         run: |

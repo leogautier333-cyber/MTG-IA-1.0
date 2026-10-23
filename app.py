@@ -1,4 +1,3 @@
-import gzip
 import json
 import hashlib
 import re
@@ -10,6 +9,7 @@ import streamlit as st
 import scryfall
 import data_manager
 import performance_view
+from database.backup import BackupEncryptionError, create_backup_bytes, restore_backup_bytes
 from modules.nexus_view import render_nexus_tab
 
 # -------------------------------------------------------------------
@@ -515,12 +515,7 @@ with tab_stock:
             st.subheader("Sauvegarde complète de la base")
             if st.button("Préparer la sauvegarde complète", key="prepare_database_backup"):
                 try:
-                    backup_json = json.dumps(
-                        data_manager.storage.export_database_snapshot(),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                    st.session_state["database_backup_bytes"] = gzip.compress(backup_json)
+                    st.session_state["database_backup_bytes"] = create_backup_bytes()
                 except Exception as error:
                     st.error(f"Création de sauvegarde impossible : {error}")
             backup_bytes = st.session_state.get("database_backup_bytes")
@@ -528,14 +523,14 @@ with tab_stock:
                 st.download_button(
                     "Télécharger la sauvegarde complète",
                     data=backup_bytes,
-                    file_name="magic-trading-backup.json.gz",
-                    mime="application/gzip",
+                    file_name="magic-trading-backup.json.gz.enc",
+                    mime="application/octet-stream",
                     key="download_database_backup",
                 )
 
             uploaded_database_backup = st.file_uploader(
-                "Restaurer une sauvegarde complète (.json.gz)",
-                type=["gz"],
+                "Restaurer une sauvegarde complète chiffrée (.json.gz.enc)",
+                type=["enc"],
                 key="database_backup_upload",
             )
             if uploaded_database_backup is not None:
@@ -556,9 +551,8 @@ with tab_stock:
                     key="restore_database_backup",
                 ):
                     try:
-                        snapshot = json.loads(gzip.decompress(backup_upload).decode("utf-8"))
-                        restored_counts = data_manager.storage.restore_database_snapshot(snapshot)
-                    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+                        restored_counts = restore_backup_bytes(backup_upload)
+                    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError, ValueError, BackupEncryptionError) as error:
                         st.error(f"Sauvegarde invalide ou restauration impossible : {error}")
                     else:
                         st.cache_data.clear()

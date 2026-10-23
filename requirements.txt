@@ -5,3 +5,4 @@ requests
 ijson
 discord.py>=2.3
 psycopg[binary]>=3.2
+cryptography>=44

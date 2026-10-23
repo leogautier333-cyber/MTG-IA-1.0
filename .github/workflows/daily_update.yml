@@ -26,6 +26,9 @@ jobs:
       - name: Connect, initialize and validate PostgreSQL schema
         run: python -m database.healthcheck
 
+      - name: Validate backup encryption key
+        run: python -m database.backup validate-key
+
       - name: Synchronize Scryfall Bulk and market signals
         run: |
           python -m services.scryfall_bulk
@@ -36,28 +39,19 @@ jobs:
         run: python discord_bot.py
 
       - name: Create compressed database backup
-        run: python -m database.backup create "$RUNNER_TEMP/magic-trading-backup.json.gz"
+        run: python -m database.backup create "$RUNNER_TEMP/magic-trading-backup.json.gz.enc"
 
       - name: Archive database backup
         uses: actions/upload-artifact@v4
         with:
           name: magic-trading-db-backup-${{ github.run_id }}
-          path: ${{ runner.temp }}/magic-trading-backup.json.gz
+          path: ${{ runner.temp }}/magic-trading-backup.json.gz.enc
           if-no-files-found: error
           retention-days: 30
 
-      - name: Commit JSON compatibility exports
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/*.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Auto-update market predictions [skip ci]"
-            git push
-          fi
-
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
 concurrency:
@@ -65,4 +59,4 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read

@@ -1,10 +1,17 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import patch
 
+from cryptography.fernet import Fernet
+
 from database import storage
-from database.backup import create_backup, restore_backup
+from database.backup import (
+    BackupEncryptionError,
+    create_backup,
+    restore_backup,
+)
 from database.healthcheck import check_database
 
 
@@ -15,6 +22,11 @@ class StorageTests(unittest.TestCase):
         self.path_patch = patch.object(storage, "DATABASE_PATH", self.database_path)
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
+        self.backup_key_patch = patch.dict(
+            os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}
+        )
+        self.backup_key_patch.start()
+        self.addCleanup(self.backup_key_patch.stop)
         self.addCleanup(self.temporary_directory.cleanup)
 
     def test_healthcheck_initializes_every_required_table(self):
@@ -133,6 +145,25 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(storage.get_edhrec_history("card-1")[-1]["edhrec_rank"], 1200)
         self.assertTrue(storage.get_source_health()["scryfall"]["succeeded"])
         self.assertEqual(storage.get_alerts_for_evaluation()[0]["alert_id"], "alert-1")
+
+    def test_backup_requires_key_and_ciphertext_hides_card_data(self):
+        storage.save_collection([{
+            "scryfall_id": "private-card-id", "name": "Private Card",
+            "set_code": "secret-set", "purchase_price": 5.0, "selling_price": 8.0,
+        }])
+        backup_path = Path(self.temporary_directory.name) / "private.json.gz.enc"
+        create_backup(backup_path)
+        ciphertext = backup_path.read_bytes()
+        self.assertNotIn(b"Private Card", ciphertext)
+        self.assertNotIn(b"private-card-id", ciphertext)
+
+        with patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
+            with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+                restore_backup(backup_path)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(BackupEncryptionError, "BACKUP_ENCRYPTION_KEY is required"):
+                create_backup(Path(self.temporary_directory.name) / "missing-key.enc")
 
 
 if __name__ == "__main__":

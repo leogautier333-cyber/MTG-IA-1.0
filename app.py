@@ -7,10 +7,8 @@ import plotly.express as px
 import streamlit as st
 
 import scryfall
-import data_manager
-import performance_view
-from database.backup import BackupEncryptionError, create_backup_bytes, restore_backup_bytes
-from modules.nexus_view import render_nexus_tab
+from services import phase_one_json as data_manager
+from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 # -------------------------------------------------------------------
 # Fonction d'affichage des symboles de mana SVG (Scryfall)
@@ -190,12 +188,10 @@ input[type="radio"] { accent-color: var(--gold) !important; }
 st.title("Magic Trading & Profit Manager")
 
 # Onglets principaux
-tab_stock, tab_search, tab_performance, tab_watchlist, tab_nexus = st.tabs([
+tab_stock, tab_search, tab_prices = st.tabs([
     "Stock & Ventes",
     "Recherche & Ajout",
-    "Performance & Analyse",
-    "Watchlist & Pépites",
-    "Magic Intelligence Nexus"
+    "Prix & Alertes"
 ])
 
 
@@ -206,6 +202,8 @@ with tab_stock:
     st.header("Tableau de bord & Stock")
 
     collection = data_manager.get_collection()
+    indexed_cards = []
+    filtered_cards = []
 
     if not collection:
         st.info("Aucune carte enregistrée dans ton stock pour le moment.")
@@ -438,13 +436,17 @@ with tab_stock:
                                 st.error("Erreur lors de la mise à jour.")
 
                 # Historique de prix
-                price_hist = data_manager.get_price_history().get(card["scryfall_id"], {})
+                price_hist = data_manager.get_variant_price_history(
+                    card["scryfall_id"], foil=card.get("foil", False)
+                )
                 if price_hist:
-                    hist_data = []
-                    for ts, val in price_hist.items():
-                        hist_data.append({"Date": ts, "Prix (€)": val.get("eur")})
-                    df_hist = pd.DataFrame(hist_data)
-                    fig = px.line(df_hist, x="Date", y="Prix (€)", title="Évolution du prix Cardmarket")
+                    df_hist = pd.DataFrame(price_hist)
+                    df_hist["Date"] = pd.to_datetime(df_hist["observed_at"], utc=True)
+                    fig = px.line(
+                        df_hist.sort_values("Date"), x="Date", y="price_eur",
+                        title="Historique des relevés Scryfall",
+                        labels={"price_eur": "Prix (€)"},
+                    )
                     st.plotly_chart(fig, width="stretch")
 
         st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
@@ -510,58 +512,6 @@ with tab_stock:
                             st.rerun()
                         else:
                             st.error("La restauration a échoué ; le stock actuel est inchangé.")
-
-            st.divider()
-            st.subheader("Sauvegarde complète de la base")
-            if st.button("Préparer la sauvegarde complète", key="prepare_database_backup"):
-                try:
-                    st.session_state["database_backup_bytes"] = create_backup_bytes()
-                except Exception as error:
-                    st.error(f"Création de sauvegarde impossible : {error}")
-            backup_bytes = st.session_state.get("database_backup_bytes")
-            if backup_bytes:
-                st.download_button(
-                    "Télécharger la sauvegarde complète",
-                    data=backup_bytes,
-                    file_name="magic-trading-backup.json.gz.enc",
-                    mime="application/octet-stream",
-                    key="download_database_backup",
-                )
-
-            uploaded_database_backup = st.file_uploader(
-                "Restaurer une sauvegarde complète chiffrée (.json.gz.enc)",
-                type=["enc"],
-                key="database_backup_upload",
-            )
-            if uploaded_database_backup is not None:
-                backup_upload = uploaded_database_backup.getvalue()
-                backup_hash = hashlib.sha256(backup_upload).hexdigest()[:12]
-                st.warning(
-                    "La restauration remplacera toutes les tables de la base : stock, watchlist, "
-                    "snapshots, signaux, historique Bulk et métadonnées."
-                )
-                confirm_database_restore = st.checkbox(
-                    "Je confirme le remplacement intégral de la base.",
-                    key=f"confirm_database_restore_{backup_hash}",
-                )
-                if st.button(
-                    "Restaurer la base complète",
-                    type="primary",
-                    disabled=not confirm_database_restore,
-                    key="restore_database_backup",
-                ):
-                    try:
-                        restored_counts = restore_backup_bytes(backup_upload)
-                    except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError, ValueError, BackupEncryptionError) as error:
-                        st.error(f"Sauvegarde invalide ou restauration impossible : {error}")
-                    else:
-                        st.cache_data.clear()
-                        st.success(
-                            "Restauration terminée : "
-                            + ", ".join(f"{table} {count}" for table, count in restored_counts.items())
-                        )
-                        st.rerun()
-
 
 # ===================================================================
 # TAB 2 : RECHERCHE & AJOUT DE CARTES
@@ -652,49 +602,93 @@ with tab_search:
                                     st.success(f"**{selected_card['name']}** enregistrée dans le stock !")
                                     st.rerun()
                                 else:
-                                    st.error("Erreur lors de l'écriture dans la base de données.")
+                                    st.error("Erreur lors de l'écriture dans le fichier JSON du stock.")
 
 
 # ===================================================================
-# TAB 3 : PERFORMANCE & ANALYSE FINANCIÈRE
+# TAB 3 : PRICE HISTORY AND STOCK ALERTS
 # ===================================================================
-with tab_performance:
-    st.header("Performance & Analyse Financière")
-    performance_view.render_performance_tab()
+with tab_prices:
+    st.header("Courbes de prix & alertes du stock")
+    st.caption("Chaque analyse ajoute un relevé. Discord est alerté à partir de ±10 % entre deux relevés consécutifs.")
 
+    action_col, test_col = st.columns(2)
+    if action_col.button("Analyser le stock maintenant", type="primary"):
+        try:
+            st.session_state["phase_one_analysis"] = analyze_stock_prices()
+            st.session_state.pop("phase_one_analysis_error", None)
+        except Exception as error:
+            st.session_state["phase_one_analysis_error"] = str(error)
+    if test_col.button("Envoyer une alerte test Discord"):
+        try:
+            send_test_alert()
+            st.session_state["phase_one_test_sent"] = True
+            st.session_state.pop("phase_one_test_error", None)
+        except Exception as error:
+            st.session_state["phase_one_test_error"] = str(error)
 
-# ===================================================================
-# TAB 4 : WATCHLIST & OPPORTUNITÉS D'ACHAT
-# ===================================================================
-with tab_watchlist:
-    st.header("Watchlist & Opportunités d'Achat (Pépites)")
+    if st.session_state.get("phase_one_analysis_error"):
+        st.error(f"Analyse impossible : {st.session_state['phase_one_analysis_error']}")
+    if st.session_state.get("phase_one_test_error"):
+        st.error(f"Test Discord impossible : {st.session_state['phase_one_test_error']}")
+    if st.session_state.pop("phase_one_test_sent", False):
+        st.success("Alerte test envoyée à Discord.")
+    analysis = st.session_state.get("phase_one_analysis")
+    if analysis:
+        st.success(
+            f"{analysis['snapshots_written']} relevé(s) ajouté(s), "
+            f"{analysis['alerts_created']} alerte(s) créée(s), "
+            f"{analysis['notifications_sent']} notification(s) envoyée(s)."
+        )
 
-    watchlist = data_manager.get_watchlist()
-
-    if not watchlist:
-        st.info("Aucune opportunité repérée pour le moment. Le script automatique d'analyse IA remplira cet onglet.")
+    owned_cards = [
+        card for card in data_manager.get_collection()
+        if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("scryfall_id")
+    ]
+    if not owned_cards:
+        st.info("Ajoute des cartes au stock pour commencer à suivre leurs prix.")
     else:
-        st.metric("Opportunités suivies", len(watchlist))
-        opportunity_columns = st.columns(2)
-        for index, item in enumerate(watchlist):
-            max_buy_price = float(item.get("max_buy_price") or 0)
-            target_price = float(item.get("estimated_target_price") or 0)
-            expected_gain = target_price - max_buy_price
+        position = st.selectbox(
+            "Carte en stock",
+            range(len(owned_cards)),
+            format_func=lambda index: (
+                f"{owned_cards[index].get('name', 'Carte')} · "
+                f"{owned_cards[index].get('set_code', '').upper()}"
+                f"{' · Foil' if owned_cards[index].get('foil') else ''}"
+            ),
+            key="phase_one_price_card",
+        )
+        selected_card = owned_cards[position]
+        history = data_manager.get_variant_price_history(
+            selected_card["scryfall_id"], foil=selected_card.get("foil", False)
+        )
+        if history:
+            chart_data = pd.DataFrame(history)
+            chart_data["Date"] = pd.to_datetime(chart_data["observed_at"], utc=True)
+            figure = px.line(
+                chart_data.sort_values("Date"), x="Date", y="price_eur",
+                markers=True, title=f"{selected_card.get('name', 'Carte')} · prix EUR",
+                labels={"price_eur": "Prix (€)"},
+            )
+            st.plotly_chart(figure, use_container_width=True)
+        else:
+            st.info("Aucun relevé de prix pour cette carte. Lance une analyse pour créer le premier point.")
 
-            with opportunity_columns[index % 2]:
-                with st.container(border=True):
-                    st.markdown(f"#### {item.get('name', 'Carte sans nom')}")
-                    st.caption(f"Fenêtre estimée · {item.get('window_hours', '—')} h")
-                    buy_col, target_col = st.columns(2)
-                    buy_col.metric("Prix d’achat max", f"{max_buy_price:.2f} €")
-                    target_col.metric("Cible estimée", f"{target_price:.2f} €", delta=f"{expected_gain:+.2f} €")
-                    st.write(item.get("reasoning", "Aucune analyse complémentaire."))
-                    if item.get("potential_seller_group_id"):
-                        st.caption(f"Groupe vendeur · {item.get('potential_seller_group_id')}")
-
-
-# ===================================================================
-# TAB 5 : MAGIC INTELLIGENCE NEXUS
-# ===================================================================
-with tab_nexus:
-    render_nexus_tab()
+    try:
+        price_alerts = json.loads((data_manager.DATA_DIR / "price_alerts.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        price_alerts = []
+    if price_alerts:
+        st.subheader("Alertes de variation")
+        st.dataframe(
+            [{
+                "Carte": alert.get("card_name"),
+                "Variation": f"{alert.get('change_pct', 0):+.1f} %",
+                "Prix précédent": f"{alert.get('previous_price', 0):.2f} €",
+                "Prix actuel": f"{alert.get('current_price', 0):.2f} €",
+                "État Discord": alert.get("status"),
+                "Date": alert.get("created_at"),
+            } for alert in reversed(price_alerts[-50:])],
+            hide_index=True,
+            use_container_width=True,
+        )

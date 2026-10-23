@@ -100,8 +100,7 @@ def notify_daily_summary():
 
 
 if __name__ == "__main__":
-    if os.getenv("DISCORD_BOT_TOKEN"):
-        run_bot()
-    else:
-        notify_daily_summary()
+    from services.phase_one_monitor import main
+
+    main()
     

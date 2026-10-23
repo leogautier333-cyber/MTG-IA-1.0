@@ -251,4 +251,6 @@ def analyze_market_and_predict():
 
 
 if __name__ == "__main__":
-    analyze_market_and_predict()
+    from services.phase_one_monitor import analyze_stock_prices
+
+    print(json.dumps(analyze_stock_prices(), ensure_ascii=False))

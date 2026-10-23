@@ -1,33 +1,27 @@
-# Architecture de production
+# Phase 1 : stock JSON et alertes Discord
 
-## Stockage et snapshots
+## Périmètre actif
 
-SQLite est la source de vérité locale, par défaut `data/mtg_manager.sqlite3`. Au premier démarrage, `collection.json`, `watchlist.json` et `price_history.json` sont importés ; les JSON originaux restent disponibles comme sauvegarde, et les nouveaux relevés JSON sont fusionnés sans remplacer le stock. `MTG_DATABASE_PATH` permet de déplacer la base locale. Pour PostgreSQL, définir `DATABASE_URL` (ou `MTG_DATABASE_URL`) sur une URI `postgresql://...` ; la connexion doit autoriser TLS en production. GitHub Actions exige le secret `DATABASE_URL`, car son disque local est éphémère.
+La phase 1 utilise `data/collection.json` comme inventaire et `data/price_history.json` comme historique de prix. Le stockage SQL présent dans le dépôt est une étape ultérieure et n'est pas utilisé par le parcours principal de l'application. La watchlist, les spoilers et les signaux communautaires sont hors périmètre.
 
-Dans GitHub, créer un secret de dépôt `DATABASE_URL` contenant la chaîne de connexion PostgreSQL de Neon/Supabase. Le workflow installe `requirements.txt`, initialise le schéma, exécute le Bulk, les signaux, le watcher et le rapport Discord. Il attache une sauvegarde gzip à chaque exécution ; les artifacts sont conservés 30 jours. Le webhook Discord utilise le secret `DISCORD_WEBHOOK_URL`.
+Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les cartes vendues et les cartes qui ne figurent pas dans l'inventaire ne sont jamais demandées à Scryfall par le moniteur de phase 1.
 
-Les sauvegardes sont compressées puis chiffrées/authentifiées avec Fernet. Définir `BACKUP_ENCRYPTION_KEY` dans l’environnement ; générer une clé avec `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` et la conserver séparément de la base. Ajouter la même clé aux secrets GitHub Actions sous `BACKUP_ENCRYPTION_KEY`. Sans cette clé, création/restauration échoue volontairement. Créer une archive avec `python -m database.backup create backup.json.gz.enc` et la restaurer avec `python -m database.backup restore backup.json.gz.enc` après confirmation. L’option `--allow-plaintext-legacy` n’est prévue que pour les anciennes archives gzip non chiffrées. L’interface Streamlit télécharge/restaure le format chiffré. Les archives Actions ne sont plus publiées comme JSON dans Git ; elles restent des artifacts privés 30 jours.
+Chaque analyse ajoute un snapshot horodaté pour le prix Scryfall EUR normal ou foil. L'historique existant est conservé. La variation est calculée entre deux relevés consécutifs de la même impression et finition. Une hausse ou baisse d'au moins 10 % crée une alerte dans `data/price_alerts.json` et l'envoie au webhook Discord configuré par `DISCORD_WEBHOOK_URL`. Les alertes non envoyées restent en attente pour une tentative ultérieure.
 
-Les prix sont enregistrés une fois par jour et impression, foil, langue et état. Une nouvelle observation le même jour met à jour le snapshot plutôt que de créer un faux échantillon de volatilité.
+Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
 
-## Scryfall et fraîcheur
+## Lancer l'application et le suivi
 
-Le worker télécharge le flux Bulk `default_cards` une fois par jour, le met en cache dans `data/cache/`, puis compare impressions et légalités. Il peut aussi être lancé manuellement avec `python -m services.scryfall_bulk`. Le flux est analysé en streaming.
+Installer les dépendances du projet avec `python -m pip install -r requirements.txt`, puis lancer l'interface avec `streamlit run app.py`.
 
-Lancer la veille persistante avec `python -m services.monitor_worker`. Les états de santé Scryfall API, Scryfall Bulk et Reddit sont indépendants et visibles dans Nexus ; `NEXUS_SCRYFALL_MAX_AGE_HOURS` et `NEXUS_SCRYFALL_BULK_MAX_AGE_HOURS` (36 h par défaut) ainsi que `NEXUS_REDDIT_MAX_AGE_HOURS` (48 h) règlent la fraîcheur.
+Configurer `DISCORD_WEBHOOK_URL` dans l'environnement local sans l'inscrire dans Git. L'interface fournit un bouton d'alerte test Discord, qui n'analyse ni ne modifie le stock.
 
-## Signaux et portefeuille
+Lancer une analyse ponctuelle avec `python -m services.phase_one_monitor --once`. Pour un suivi régulier et des snapshots intrajournaliers, lancer le processus persistant avec `python -m services.phase_one_monitor`. L'intervalle par défaut est d'une heure et peut être réglé avec `NEXUS_POLL_INTERVAL_SECONDS` (minimum cinq minutes). Le processus doit rester actif sur une machine qui conserve les fichiers JSON.
 
-Le risque de réimpression combine le flag Reserved List, l’âge de la dernière sortie Scryfall, les intervalles observés entre éditions et, si disponibles, les rendements de prix à +30/+90 jours après les réimpressions.
+Envoyer une alerte de test sans analyser l'inventaire avec `python -m services.phase_one_monitor --test-discord`. Le webhook doit être configuré dans l'environnement du processus.
 
-L’indice anti-buyout n’utilise aucune API Cardmarket : il compare un spike sur sept jours aux snapshots SQLite, mesure son écart à la volatilité récente, puis neutralise le score si un changement de légalité ou une réimpression est détecté sur la période. Le rang `edhrec_rank` du Bulk est historisé quotidiennement ; son amélioration récente peut qualifier la hausse de soutenue par l’adoption Commander. Un rang élevé seul indique une popularité, pas une accélération de demande. Ce score est une alerte heuristique, jamais une preuve de manipulation ni une mesure de volume vendu.
+Le workflow GitHub Actions ne lance plus d'analyses planifiées : un runner éphémère ne conserve pas `price_history.json` entre les exécutions, et publier le stock JSON dans Git n'est pas approprié pour des données financières sensibles. Le workflow manuel sert uniquement à vérifier la livraison Discord.
 
-Les métriques de portefeuille utilisent les snapshots disponibles et retombent sur le prix de vente configuré si l’impression n’a pas d’historique. Les frais Cardmarket (5 % par défaut), frais d’envoi et décotes par état sont des paramètres estimatifs à ajuster à la transaction réelle.
+## Prochaines étapes
 
-## Copilote et Discord
-
-Le copilote peut appeler uniquement les outils listés dans `agents/tools.py`. Le fournisseur OpenAI-compatible est optionnel (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`) ; sans clé, l’assistant local reste actif. Les nombres du texte modèle sont vérifiés contre les résultats d’outils.
-
-Les commandes slash `/prix`, `/portfolio` et `/watch` nécessitent `DISCORD_BOT_TOKEN`. Le rapport quotidien webhook continue d’utiliser `DISCORD_WEBHOOK_URL`. `NEXUS_MIN_ALERT_SEVERITY` accepte `LOW`, `MEDIUM` ou `HIGH`.
-
-Les decklists texte, Moxfield et Archidekt sont acceptées. Les coûts des cartes manquantes sont des estimations Scryfall EUR, pas des offres Cardmarket fermes. Les cartes du stock absentes d’une decklist ne sont pas automatiquement considérées comme jamais jouées.
+Les commandes slash Discord, la watchlist, le backtesting, les signaux avancés et la migration vers SQL ne font pas partie du parcours actif de phase 1. La migration SQL devra être planifiée séparément, avec sauvegarde et réconciliation explicite des données JSON avant tout changement de source de vérité.

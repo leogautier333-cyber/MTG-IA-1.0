@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from database import storage
+from database import market_data, storage
 from services.backtesting import backtest_price_threshold, evaluate_alerts
 from services.deck_importer import analyze_decklist, parse_plain_decklist
 from services.market_signals import (
@@ -24,6 +24,12 @@ class WorkflowTests(unittest.TestCase):
         self.path_patch = patch.object(storage, "DATABASE_PATH", self.database_path)
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
+        for isolation in (
+            patch.object(storage, "DATABASE_URL", None),
+            patch.dict("os.environ", {"DATABASE_URL": "", "MTG_DATABASE_URL": ""}),
+        ):
+            isolation.start()
+            self.addCleanup(isolation.stop)
         self.addCleanup(self.temporary_directory.cleanup)
 
     def test_alert_outcomes_and_threshold_backtest(self):
@@ -79,8 +85,8 @@ class WorkflowTests(unittest.TestCase):
             "prices": {"eur": "5.00", "eur_foil": "9.00"},
             "edhrec_rank": 12000,
         }
-        storage.sync_bulk_prints([old_print], synced_at="2010-01-01T00:00:00+00:00")
-        storage.sync_bulk_prints([old_print, new_print], synced_at="2020-01-01T00:00:00+00:00")
+        market_data.sync_bulk_prints([old_print], synced_at="2010-01-01T00:00:00+00:00")
+        market_data.sync_bulk_prints([old_print, new_print], synced_at="2020-01-01T00:00:00+00:00")
         for day, price in (("2020-01-01", 10), ("2020-01-31", 8), ("2020-03-31", 7)):
             storage.record_price_snapshot("old", price, observed_at=f"{day}T00:00:00+00:00")
 
@@ -95,7 +101,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(risk["expected_change_90d_pct"], -30)
         self.assertEqual(risk["release_intervals_days"], [3652])
         self.assertEqual(arbitrage[0]["buy_set"], "new")
-        demand_history = storage.get_edhrec_history("old")
+        demand_history = market_data.get_edhrec_history("old")
         self.assertEqual(demand_history[-1]["edhrec_rank"], 50000)
 
     def test_snapshot_buyout_uses_reprint_legality_and_edhrec_evidence(self):
@@ -104,9 +110,9 @@ class WorkflowTests(unittest.TestCase):
             "set": "set1", "released_at": "2020-01-01", "legalities": {},
             "edhrec_rank": 50000,
         }
-        storage.sync_bulk_prints([tracked], synced_at="2026-09-14T00:00:00+00:00")
+        market_data.sync_bulk_prints([tracked], synced_at="2026-09-14T00:00:00+00:00")
         updated = {**tracked, "edhrec_rank": 10000}
-        storage.sync_bulk_prints([updated], synced_at="2026-10-14T00:00:00+00:00")
+        market_data.sync_bulk_prints([updated], synced_at="2026-10-14T00:00:00+00:00")
         for day, price in (
             ("2026-09-01", 10.0), ("2026-09-07", 10.1), ("2026-09-14", 10.0),
             ("2026-10-10", 13.0), ("2026-10-14", 15.0),
@@ -137,12 +143,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("LEGALITY_CHANGE", {event["signal_type"] for event in legality_event["fundamental_events"]})
 
     def test_snapshot_buyout_flags_an_unexplained_spike_and_logs_it(self):
-        storage.sync_bulk_prints([{
+        market_data.sync_bulk_prints([{
             "id": "spec-card", "oracle_id": "spec-oracle", "name": "Spec Card",
             "set": "set1", "released_at": "2020-01-01", "legalities": {},
             "edhrec_rank": 50000,
         }], synced_at="2026-09-14T00:00:00+00:00")
-        storage.sync_bulk_prints([{
+        market_data.sync_bulk_prints([{
             "id": "spec-card", "oracle_id": "spec-oracle", "name": "Spec Card",
             "set": "set1", "released_at": "2020-01-01", "legalities": {},
             "edhrec_rank": 50000,

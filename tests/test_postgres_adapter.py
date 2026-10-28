@@ -73,6 +73,7 @@ class PostgresAdapterTests(unittest.TestCase):
     def test_postgres_connection_uses_configured_dsn_and_named_rows(self):
         fake_connection = FakeConnection()
         with patch.object(storage, "DATABASE_URL", "postgresql://example.invalid/db"), \
+             patch.dict(os.environ, {"DATABASE_URL": "", "MTG_DATABASE_URL": ""}), \
              patch("psycopg.connect", return_value=fake_connection) as connect:
             connection = storage._connect()
 

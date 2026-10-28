@@ -4,7 +4,7 @@ from pathlib import Path
 import ijson
 import requests
 
-from database import storage
+from database import market_data, storage
 
 
 SCRYFALL_BULK_URL = "https://api.scryfall.com/bulk-data"
@@ -53,7 +53,7 @@ def sync_scryfall_bulk(session=requests, force=False):
             return {"status": "UNCHANGED", "updated_at": updated_at}
 
         _download_bulk_file(bulk_info["download_uri"], session=session)
-        diff = storage.sync_bulk_prints(_stream_cards(CACHE_PATH), synced_at=updated_at or None)
+        diff = market_data.sync_bulk_prints(_stream_cards(CACHE_PATH), synced_at=updated_at or None)
         storage.set_metadata("scryfall_bulk_updated_at", updated_at)
         storage.record_source_health("scryfall_bulk", True, "Bulk default_cards synchronisé.")
         return {"status": "UPDATED", "updated_at": updated_at, **diff}

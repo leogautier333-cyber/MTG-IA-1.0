@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from database import storage
+from database import market_data, storage
 
 
 CONDITION_DISCOUNTS = {"NM": 0.0, "EX": 0.03, "LP": 0.05, "GD": 0.08, "PL": 0.15, "PO": 0.25}
@@ -183,7 +183,7 @@ def suggest_arbitrage(collection, max_suggestions=5):
             continue
         sale = simulate_sale(card, current_price)
         quantity = sale["quantity"]
-        for alternative in storage.get_alternative_printings(card["scryfall_id"]):
+        for alternative in market_data.get_alternative_printings(card["scryfall_id"]):
             target_price = alternative.get("price_eur_foil" if card.get("foil") else "price_eur")
             if target_price is None or target_price <= 0 or target_price >= current_price:
                 continue

@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 
 import scryfall
-from services import phase_one_json as data_manager
+import data_manager
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 # -------------------------------------------------------------------
@@ -188,10 +188,11 @@ input[type="radio"] { accent-color: var(--gold) !important; }
 st.title("Magic Trading & Profit Manager")
 
 # Onglets principaux
-tab_stock, tab_search, tab_prices = st.tabs([
+tab_stock, tab_search, tab_prices, tab_nexus = st.tabs([
     "Stock & Ventes",
     "Recherche & Ajout",
-    "Prix & Alertes"
+    "Prix & Alertes",
+    "Nexus"
 ])
 
 
@@ -598,11 +599,10 @@ with tab_search:
                                     legalities=selected_card.get("legalities", {})
                                 )
                                 if success:
-                                    st.cache_data.clear()
                                     st.success(f"**{selected_card['name']}** enregistrée dans le stock !")
                                     st.rerun()
                                 else:
-                                    st.error("Erreur lors de l'écriture dans le fichier JSON du stock.")
+                                    st.error("Erreur lors de l'écriture dans la base du stock.")
 
 
 # ===================================================================
@@ -616,6 +616,7 @@ with tab_prices:
     if action_col.button("Analyser le stock maintenant", type="primary"):
         try:
             st.session_state["phase_one_analysis"] = analyze_stock_prices()
+            data_manager.clear_cache()
             st.session_state.pop("phase_one_analysis_error", None)
         except Exception as error:
             st.session_state["phase_one_analysis_error"] = str(error)
@@ -664,7 +665,10 @@ with tab_prices:
         )
         if history:
             chart_data = pd.DataFrame(history)
-            chart_data["Date"] = pd.to_datetime(chart_data["observed_at"], utc=True)
+            chart_data["Date"] = pd.to_datetime(chart_data["observed_at"], utc=True, errors="coerce")
+            chart_data["Date"] = chart_data["Date"].fillna(
+                pd.to_datetime(chart_data["snapshot_date"], utc=True, errors="coerce")
+            )
             figure = px.line(
                 chart_data.sort_values("Date"), x="Date", y="price_eur",
                 markers=True, title=f"{selected_card.get('name', 'Carte')} · prix EUR",
@@ -674,10 +678,7 @@ with tab_prices:
         else:
             st.info("Aucun relevé de prix pour cette carte. Lance une analyse pour créer le premier point.")
 
-    try:
-        price_alerts = json.loads((data_manager.DATA_DIR / "price_alerts.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        price_alerts = []
+    price_alerts = data_manager.get_price_alerts()
     if price_alerts:
         st.subheader("Alertes de variation")
         st.dataframe(
@@ -692,3 +693,14 @@ with tab_prices:
             hide_index=True,
             use_container_width=True,
         )
+
+
+# ===================================================================
+# TAB 4 : NEXUS (watchlist, signaux, backtesting, assistant)
+# ===================================================================
+with tab_nexus:
+    try:
+        from modules.nexus_view import render_nexus_tab
+        render_nexus_tab()
+    except Exception as error:
+        st.error(f"L'onglet Nexus est indisponible : {error}")

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from database import storage
+from database import snapshot
 
 
 class BackupEncryptionError(RuntimeError):
@@ -33,10 +33,10 @@ def validate_key():
     return True
 
 
-def create_backup_bytes(snapshot=None):
-    snapshot = snapshot or storage.export_database_snapshot()
+def create_backup_bytes(snapshot_data=None):
+    snapshot_data = snapshot_data or snapshot.export_database_snapshot()
     serialized = json.dumps(
-        snapshot, ensure_ascii=False, separators=(",", ":")
+        snapshot_data, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
     compressed = gzip.compress(serialized, mtime=0)
     return _fernet().encrypt(compressed)
@@ -53,10 +53,10 @@ def restore_backup_bytes(encrypted_bytes, allow_plaintext_legacy=False):
                 "Backup authentication failed; the key is incorrect or the archive was modified."
             ) from None
     try:
-        snapshot = json.loads(gzip.decompress(compressed).decode("utf-8"))
+        snapshot_data = json.loads(gzip.decompress(compressed).decode("utf-8"))
     except (OSError, EOFError, UnicodeDecodeError, json.JSONDecodeError):
         raise BackupEncryptionError("Backup is not a valid compressed database snapshot.") from None
-    return storage.restore_database_snapshot(snapshot)
+    return snapshot.restore_database_snapshot(snapshot_data)
 
 
 def create_backup(destination):

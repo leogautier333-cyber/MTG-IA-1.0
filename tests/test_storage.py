@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
-from database import storage
+from database import market_data, storage
 from database.backup import (
     BackupEncryptionError,
     create_backup,
@@ -22,6 +22,13 @@ class StorageTests(unittest.TestCase):
         self.path_patch = patch.object(storage, "DATABASE_PATH", self.database_path)
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
+        # Jamais de PostgreSQL réel dans les tests : une restauration y effacerait les données.
+        self.url_patch = patch.object(storage, "DATABASE_URL", None)
+        self.url_patch.start()
+        self.addCleanup(self.url_patch.stop)
+        self.env_patch = patch.dict(os.environ, {"DATABASE_URL": "", "MTG_DATABASE_URL": ""})
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
         self.backup_key_patch = patch.dict(
             os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}
         )
@@ -88,7 +95,7 @@ class StorageTests(unittest.TestCase):
         )
 
     def test_bulk_diff_detects_reprints_and_duel_legality_changes(self):
-        initial = storage.sync_bulk_prints([
+        initial = market_data.sync_bulk_prints([
             {
                 "id": "old-print", "oracle_id": "oracle-1", "name": "Card",
                 "set": "old", "legalities": {"duel": "legal"},
@@ -96,7 +103,7 @@ class StorageTests(unittest.TestCase):
         ], synced_at="2026-10-13T00:00:00+00:00")
         self.assertTrue(initial["baseline"])
 
-        result = storage.sync_bulk_prints([
+        result = market_data.sync_bulk_prints([
             {
                 "id": "old-print", "oracle_id": "oracle-1", "name": "Card",
                 "set": "old", "legalities": {"duel": "not_legal"},
@@ -122,7 +129,7 @@ class StorageTests(unittest.TestCase):
         storage.record_price_snapshot(
             "card-1", 2.5, observed_at="2026-10-14T12:00:00+00:00"
         )
-        storage.sync_bulk_prints([{
+        market_data.sync_bulk_prints([{
             "id": "card-1", "oracle_id": "oracle-1", "name": "Card",
             "set": "set1", "released_at": "2020-01-01", "legalities": {},
             "edhrec_rank": 1200,
@@ -142,7 +149,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(len(storage.get_collection()), 1)
         self.assertEqual(len(storage.get_watchlist()), 1)
         self.assertEqual(storage.get_price_history()["card-1"]["2026-10-14"]["eur"], 2.5)
-        self.assertEqual(storage.get_edhrec_history("card-1")[-1]["edhrec_rank"], 1200)
+        self.assertEqual(market_data.get_edhrec_history("card-1")[-1]["edhrec_rank"], 1200)
         self.assertTrue(storage.get_source_health()["scryfall"]["succeeded"])
         self.assertEqual(storage.get_alerts_for_evaluation()[0]["alert_id"], "alert-1")
 

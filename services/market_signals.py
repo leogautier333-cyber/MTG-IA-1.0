@@ -1,12 +1,12 @@
 import hashlib
 from datetime import date, datetime, timedelta, timezone
 
-from database import storage
+from database import market_data, storage
 
 
 def calculate_reprint_risk(scryfall_id, today=None):
     """Estimate reprint exposure from Reserved List, release recency and release cadence."""
-    profile = storage.get_printing_profile(scryfall_id)
+    profile = market_data.get_printing_profile(scryfall_id)
     if not profile:
         return {"status": "INSUFFICIENT_DATA", "score": None, "reason": "Impression absente du Bulk Scryfall."}
 
@@ -113,7 +113,7 @@ def analyze_snapshot_buyout(scryfall_id, foil=False, language="FR", condition="N
             "reason": f"Dernier snapshot vieux de {snapshot_age_days} jours; actualise les données avant d'évaluer un spike.",
         }
 
-    demand_history = storage.get_edhrec_history(scryfall_id)
+    demand_history = market_data.get_edhrec_history(scryfall_id)
     dated_demand = [
         item for item in demand_history
         if item.get("snapshot_date") and item.get("edhrec_rank") is not None
@@ -156,7 +156,7 @@ def analyze_snapshot_buyout(scryfall_id, foil=False, language="FR", condition="N
             "reason": f"Variation de {change_pct:.1f} % sur {window_days} jours, sous le seuil de {spike_threshold_pct:.0f} %.",
         }
 
-    events = storage.get_recent_market_events(scryfall_id, baseline_day.isoformat())
+    events = market_data.get_recent_market_events(scryfall_id, baseline_day.isoformat())
     if events:
         event_types = sorted({event["signal_type"] for event in events})
         return {

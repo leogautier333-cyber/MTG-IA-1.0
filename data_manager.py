@@ -1,125 +1,60 @@
-from datetime import datetime
+"""Façade Streamlit du stock : lectures mises en cache, écritures qui invalident le cache."""
+import functools
+
 import streamlit as st
 
-from database import storage
+from database import storage  # noqa: F401  (utilisé via data_manager.storage par les modules Nexus)
+from services import inventory
+from services.inventory import (  # noqa: F401  (ré-exports)
+    REQUIRED_COLLECTION_FIELDS,
+    calculate_net_margin,
+    is_valid_collection,
+)
 
-REQUIRED_COLLECTION_FIELDS = {"scryfall_id", "name", "set_code", "purchase_price", "selling_price"}
+CACHE_TTL_SECONDS = 60
 
-@st.cache_data(ttl=60)
+
+def clear_cache():
+    st.cache_data.clear()
+
+
+def _invalidating(function):
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        result = function(*args, **kwargs)
+        clear_cache()
+        return result
+    return wrapper
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_collection():
-    try:
-        return storage.get_collection()
-    except Exception as e:
-        print(f"Erreur lecture collection: {e}")
-        return []
+    return inventory.get_collection()
 
-def save_collection(collection):
-    storage.save_collection(collection)
-    st.cache_data.clear()
 
-def replace_collection(collection):
-    """Remplace le stock après validation, puis invalide le cache Streamlit."""
-    if not is_valid_collection(collection):
-        return False
-
-    try:
-        storage.save_collection(collection)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        print(f"Erreur lors du remplacement de la collection : {e}")
-        return False
-
-def is_valid_collection(collection):
-    """Vérifie la structure minimale requise par l'interface de stock."""
-    return isinstance(collection, list) and all(
-        isinstance(card, dict) and REQUIRED_COLLECTION_FIELDS.issubset(card)
-        for card in collection
-    )
-
-def add_card_to_collection(**kwargs):
-    try:
-        collection = get_collection()
-        
-        card_entry = {
-            "scryfall_id": kwargs.get("scryfall_id", ""),
-            "name": kwargs.get("name", ""),
-            "set_code": kwargs.get("set_code", ""),
-            "collector_number": str(kwargs.get("collector_number", "")),
-            "language": kwargs.get("language", "FR"),
-            "condition": kwargs.get("condition", "NM"),
-            "foil": kwargs.get("foil", False),
-            "quantity": int(kwargs.get("quantity", 1)),
-            "purchase_price": float(kwargs.get("purchase_price", 0.0)),
-            "selling_price": float(kwargs.get("selling_price", 0.0)),
-            "liquidity_rating": kwargs.get("liquidity_rating", "MEDIUM"),
-            "status": "FOR_SALE",
-            "date_added": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "image_url": kwargs.get("image_url", ""),
-            "mana_cost": kwargs.get("mana_cost", ""),
-            "type_line": kwargs.get("type_line", ""),
-            "oracle_text": kwargs.get("oracle_text", ""),
-            "legalities": kwargs.get("legalities", {})
-        }
-        
-        collection.append(card_entry)
-        save_collection(collection)
-        st.cache_data.clear()  # Vider le cache Streamlit
-        return True
-    except Exception as e:
-        print(f"Erreur lors de l'ajout de la carte : {e}")
-        return False
-
-def mark_card_as_sold(scryfall_id, actual_sale_price):
-    try:
-        collection = get_collection()
-        updated = False
-        for card in collection:
-            if card.get("scryfall_id") == scryfall_id and card.get("status") == "FOR_SALE":
-                card["status"] = "SOLD"
-                card["actual_sale_price"] = float(actual_sale_price)
-                card["date_sold"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                updated = True
-                break
-        if updated:
-            save_collection(collection)
-            st.cache_data.clear()
-        return updated
-    except Exception as e:
-        print(f"Erreur lors du marquage de vente : {e}")
-        return False
-
-def calculate_net_margin(selling_price, purchase_price, shipping=0.0, cm_fee_pct=0.05):
-    selling_price = float(selling_price or 0.0)
-    purchase_price = float(purchase_price or 0.0)
-    shipping = float(shipping or 0.0)
-    
-    cm_fee = selling_price * cm_fee_pct
-    net_revenue = selling_price - cm_fee - shipping
-    net_profit = net_revenue - purchase_price
-    roi_percent = (net_profit / purchase_price * 100) if purchase_price > 0 else 0.0
-    
-    return {
-        "net_profit": round(net_profit, 2),
-        "roi_percent": round(roi_percent, 1),
-        "cm_fee": round(cm_fee, 2)
-    }
-
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_watchlist():
-    try:
-        return storage.get_watchlist()
-    except Exception as e:
-        print(f"Erreur lecture watchlist: {e}")
-        return []
+    return inventory.get_watchlist()
 
-def save_watchlist(watchlist):
-    storage.save_watchlist(watchlist)
-    st.cache_data.clear()
 
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_price_history():
-    return storage.get_price_history()
+    return inventory.get_price_history()
 
-def record_price_snapshot(scryfall_id, price, foil=False, language="FR", condition="NM", observed_at=None):
-    return storage.record_price_snapshot(
-        scryfall_id, price, foil, language, condition, observed_at
-    )
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_variant_price_history(scryfall_id, foil=False, language="FR", condition="NM"):
+    return inventory.get_variant_price_history(scryfall_id, foil, language, condition)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_price_alerts():
+    return inventory.get_price_alerts()
+
+
+save_collection = _invalidating(inventory.save_collection)
+replace_collection = _invalidating(inventory.replace_collection)
+add_card_to_collection = _invalidating(inventory.add_card_to_collection)
+mark_card_as_sold = _invalidating(inventory.mark_card_as_sold)
+save_watchlist = _invalidating(inventory.save_watchlist)
+record_price_snapshot = _invalidating(inventory.record_price_snapshot)

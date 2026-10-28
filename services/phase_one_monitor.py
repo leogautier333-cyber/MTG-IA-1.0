@@ -9,28 +9,13 @@ from datetime import datetime, timezone
 import requests
 import scryfall
 
-from services import phase_one_json as json_data
+from services import inventory
 
 
 LOGGER = logging.getLogger("magic_nexus.phase_one")
 ALERT_THRESHOLD_PCT = 10.0
 POLL_INTERVAL_SECONDS = max(300, int(os.getenv("NEXUS_POLL_INTERVAL_SECONDS", "3600")))
 DISCORD_WEBHOOK_URL = "DISCORD_WEBHOOK_URL"
-
-
-def _alert_file():
-    return json_data.DATA_DIR / "price_alerts.json"
-
-
-def _read_alerts():
-    try:
-        with _alert_file().open("r", encoding="utf-8") as source:
-            alerts = json.load(source)
-    except FileNotFoundError:
-        return []
-    if not isinstance(alerts, list):
-        raise ValueError("price_alerts.json doit contenir une liste d'alertes.")
-    return alerts
 
 
 def _send_webhook(title, description, session=requests, webhook_url=None):
@@ -109,16 +94,15 @@ def _create_price_alert(position, previous, current, observed_at):
 
 
 def _deliver_pending_alerts(active_positions, session=requests):
-    alerts = _read_alerts()
     sent = 0
-    changed = False
-    for alert in alerts:
+    changed = []
+    for alert in inventory.get_price_alerts():
         if alert.get("status") != "pending":
             continue
         position_key = (alert.get("scryfall_id"), bool(alert.get("foil")))
         if position_key not in active_positions:
             alert["status"] = "cancelled"
-            changed = True
+            changed.append(alert)
             continue
         try:
             _send_webhook(
@@ -131,15 +115,15 @@ def _deliver_pending_alerts(active_positions, session=requests):
             continue
         alert["status"] = "sent"
         alert["sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        changed = True
+        changed.append(alert)
         sent += 1
     if changed:
-        json_data._write_json_atomic(_alert_file(), alerts)
+        inventory.save_price_alerts(changed)
     return sent
 
 
 def analyze_stock_prices(session=requests):
-    positions = _stock_positions(json_data.get_collection())
+    positions = _stock_positions(inventory.get_collection())
     if not positions:
         notifications_sent = _deliver_pending_alerts(set(), session=session)
         return {
@@ -154,10 +138,9 @@ def analyze_stock_prices(session=requests):
         if card.get("id")
     }
     observed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-    alerts = _read_alerts()
-    known_alert_ids = {alert.get("id") for alert in alerts}
+    known_alert_ids = {alert.get("id") for alert in inventory.get_price_alerts()}
+    new_alerts = []
     snapshots_written = 0
-    alerts_created = 0
 
     for position in positions.values():
         card_data = cards_by_id.get(position["scryfall_id"])
@@ -168,11 +151,11 @@ def analyze_stock_prices(session=requests):
         if raw_price in (None, ""):
             continue
         current_price = float(raw_price)
-        history = json_data.get_variant_price_history(
+        history = inventory.get_variant_price_history(
             position["scryfall_id"], foil=position["foil"]
         )
         previous = history[-1] if history else None
-        json_data.record_price_snapshot(
+        inventory.record_price_snapshot(
             position["scryfall_id"], current_price, foil=position["foil"],
             observed_at=observed_at,
         )
@@ -185,24 +168,23 @@ def analyze_stock_prices(session=requests):
             continue
         alert = _create_price_alert(position, previous, current_price, observed_at)
         if alert["id"] not in known_alert_ids:
-            alerts.append(alert)
+            new_alerts.append(alert)
             known_alert_ids.add(alert["id"])
-            alerts_created += 1
 
-    if alerts_created:
-        json_data._write_json_atomic(_alert_file(), alerts)
+    if new_alerts:
+        inventory.save_price_alerts(new_alerts)
     notifications_sent = _deliver_pending_alerts(set(positions), session=session)
     return {
         "analyzed": len(positions),
         "snapshots_written": snapshots_written,
-        "alerts_created": alerts_created,
+        "alerts_created": len(new_alerts),
         "notifications_sent": notifications_sent,
     }
 
 
 def run_forever():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    LOGGER.info("Veille JSON du stock lancée; intervalle=%d s.", POLL_INTERVAL_SECONDS)
+    LOGGER.info("Veille du stock lancée; intervalle=%d s.", POLL_INTERVAL_SECONDS)
     while True:
         try:
             result = analyze_stock_prices()

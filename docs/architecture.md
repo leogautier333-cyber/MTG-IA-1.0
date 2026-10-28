@@ -28,6 +28,8 @@ Lancer une analyse ponctuelle avec `python -m services.phase_one_monitor --once`
 Envoyer une alerte de test sans analyser l'inventaire avec `python -m services.phase_one_monitor --test-discord`. Le webhook doit être configuré dans l'environnement du processus.
 
 GitHub Actions : `stock_analysis.yml` lance l'analyse chaque jour à 07:00 UTC (et à la demande) sur la base PostgreSQL, avec les secrets `DATABASE_URL` et `DISCORD_WEBHOOK_URL`. `daily_update.yml` reste un test manuel de livraison Discord. Sans `DATABASE_URL`, le moniteur refuse de tourner sur un runner pour ne pas écrire dans une base SQLite éphémère.
+`backup.yml` crée chaque dimanche à 03:30 UTC (et à la demande) une sauvegarde chiffrée, publiée comme artefact GitHub
+conservé 90 jours (secrets `DATABASE_URL` et `BACKUP_ENCRYPTION_KEY`).
 
 ## Tests
 

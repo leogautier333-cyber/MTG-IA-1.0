@@ -8,7 +8,18 @@ import streamlit as st
 
 import scryfall
 import data_manager
+from services import stock_advisor
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
+
+
+def price_history_frame(history):
+    """Relevés de prix avec une colonne Date, tolérante aux anciens formats (2026-09-23_22h)."""
+    frame = pd.DataFrame(history)
+    frame["Date"] = pd.to_datetime(frame["observed_at"], utc=True, errors="coerce")
+    frame["Date"] = frame["Date"].fillna(
+        pd.to_datetime(frame["snapshot_date"], utc=True, errors="coerce")
+    )
+    return frame
 
 # -------------------------------------------------------------------
 # Fonction d'affichage des symboles de mana SVG (Scryfall)
@@ -238,7 +249,9 @@ with tab_stock:
             and (condition_filter == "Tous" or str(card.get("condition", "NM")) == condition_filter)
         ]
         filtered_cards = [card for _, card in indexed_cards]
-
+        popularity_by_card = data_manager.get_popularity_deltas(
+            tuple(sorted({str(card["scryfall_id"]) for card in filtered_cards if card.get("scryfall_id")}))
+        )
         st.divider()
 
         if filtered_cards:
@@ -324,7 +337,9 @@ with tab_stock:
 
                         margin_value = margin_info["net_profit"] * quantity
                         st.markdown(render_margin_badge(margin_value, margin_info["roi_percent"]), unsafe_allow_html=True)
-
+                        st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
+                            popularity_by_card.get(str(card.get("scryfall_id")))
+                        ))
                         if target_status == "FOR_SALE":
                             with st.popover("Vendre", use_container_width=True):
                                 actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{idx}")
@@ -338,7 +353,11 @@ with tab_stock:
         # ---------------------------------------------------------------
         else:
             df = pd.DataFrame(filtered_cards)
-            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "purchase_price", "selling_price", "liquidity_rating"]
+            df["popularity"] = [
+                stock_advisor.popularity_badge(popularity_by_card.get(str(card.get("scryfall_id"))))
+                for card in filtered_cards
+            ]
+            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "purchase_price", "selling_price", "liquidity_rating", "popularity"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
 
@@ -352,6 +371,7 @@ with tab_stock:
                 "purchase_price": st.column_config.NumberColumn("Prix d'Achat", format="%.2f €"),
                 "selling_price": st.column_config.NumberColumn("Prix Vente Fixé", format="%.2f €"),
                 "liquidity_rating": st.column_config.TextColumn("Liquidité", width="small"),
+                "popularity": st.column_config.TextColumn("Popularité 30 j", width="small"),
                 "actual_sale_price": st.column_config.NumberColumn("Prix Vente Réel", format="%.2f €"),
                 "date_sold": st.column_config.TextColumn("Date de Vente")
             }
@@ -441,8 +461,7 @@ with tab_stock:
                     card["scryfall_id"], foil=card.get("foil", False)
                 )
                 if price_hist:
-                    df_hist = pd.DataFrame(price_hist)
-                    df_hist["Date"] = pd.to_datetime(df_hist["observed_at"], utc=True)
+                    df_hist = price_history_frame(price_hist)
                     fig = px.line(
                         df_hist.sort_values("Date"), x="Date", y="price_eur",
                         title="Historique des relevés Scryfall",
@@ -664,11 +683,7 @@ with tab_prices:
             selected_card["scryfall_id"], foil=selected_card.get("foil", False)
         )
         if history:
-            chart_data = pd.DataFrame(history)
-            chart_data["Date"] = pd.to_datetime(chart_data["observed_at"], utc=True, errors="coerce")
-            chart_data["Date"] = chart_data["Date"].fillna(
-                pd.to_datetime(chart_data["snapshot_date"], utc=True, errors="coerce")
-            )
+            chart_data = price_history_frame(history)
             figure = px.line(
                 chart_data.sort_values("Date"), x="Date", y="price_eur",
                 markers=True, title=f"{selected_card.get('name', 'Carte')} · prix EUR",

@@ -4,7 +4,7 @@ import functools
 import streamlit as st
 
 from database import storage  # noqa: F401  (utilisé via data_manager.storage par les modules Nexus)
-from services import inventory
+from services import inventory, stock_advisor
 from services.inventory import (  # noqa: F401  (ré-exports)
     REQUIRED_COLLECTION_FIELDS,
     calculate_net_margin,
@@ -50,6 +50,11 @@ def get_variant_price_history(scryfall_id, foil=False, language="FR", condition=
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_price_alerts():
     return inventory.get_price_alerts()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_popularity_deltas(scryfall_ids):
+    return {scryfall_id: stock_advisor.popularity_delta_pct(scryfall_id) for scryfall_id in scryfall_ids}
 
 
 save_collection = _invalidating(inventory.save_collection)

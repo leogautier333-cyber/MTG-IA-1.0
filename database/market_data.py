@@ -125,6 +125,23 @@ def sync_bulk_prints(cards, synced_at=None):
     return summary
 
 
+def record_demand_snapshot(scryfall_id, edhrec_rank, snapshot_day=None):
+    """Enregistre le rang EDHREC du jour pour une carte (sans dépendre du bulk Scryfall)."""
+    rank = _as_optional_int(edhrec_rank)
+    if rank is None or rank <= 0:
+        return False
+    snapshot_day = snapshot_day or datetime.now(timezone.utc).date().isoformat()
+    with _database() as connection:
+        connection.execute(
+            """INSERT INTO card_demand_snapshots(scryfall_id, snapshot_date, edhrec_rank)
+               VALUES (?, ?, ?)
+               ON CONFLICT(scryfall_id, snapshot_date)
+               DO UPDATE SET edhrec_rank = excluded.edhrec_rank""",
+            (str(scryfall_id), snapshot_day, rank),
+        )
+    return True
+
+
 def get_edhrec_history(scryfall_id):
     with _database() as connection:
         rows = connection.execute(

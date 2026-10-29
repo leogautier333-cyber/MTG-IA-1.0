@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import requests
 import scryfall
 
-from database import market_data
+from database import market_data, storage
 from services import inventory, spoiler_watcher, stock_advisor
 
 
@@ -64,7 +64,33 @@ def _stock_positions(collection):
             "quantity": 0,
         })
         position["quantity"] += max(1, int(card.get("quantity") or 1))
+        target = float(card.get("target_price") or 0)
+        if target > 0:
+            position["target_price"] = min(target, position.get("target_price") or target)
     return positions
+
+
+def _create_target_alert(position, current_price, observed_at):
+    target = position["target_price"]
+    identity = f"target|{position['scryfall_id']}|{position['foil']}|{target:.2f}"
+    return {
+        "id": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "kind": "TARGET_REACHED",
+        "status": "pending",
+        "created_at": observed_at,
+        "scryfall_id": position["scryfall_id"],
+        "foil": position["foil"],
+        "card_name": position["name"],
+        "set_code": position.get("set_code", ""),
+        "quantity": position["quantity"],
+        "current_price": current_price,
+        "target_price": target,
+        "message": (
+            f"{position['name']} : le prix du marché ({current_price:.2f} €) a atteint ton objectif "
+            f"de vente de {target:.2f} €. Quantité en stock : {position['quantity']}."
+        ),
+        "verdict": "Objectif atteint : vente conseillée pour sécuriser la plus-value.",
+    }
 
 
 def _create_price_alert(position, previous, current, observed_at, advice=None, popularity_delta=None):
@@ -172,6 +198,23 @@ def _deliver_pending_alerts(active_positions, session=requests):
     return sent
 
 
+def _notify_source_problem(errors, session=requests):
+    """Prévient sur Discord quand Scryfall ou Reddit ne répondent pas (au plus une fois par jour)."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    if storage.get_metadata("source_alert_date") == today:
+        return
+    try:
+        _send_webhook(
+            "[VEILLE · SOURCE INDISPONIBLE]",
+            "Une source de données n'a pas répondu pendant l'analyse :\n- " + "\n- ".join(errors),
+            session=session, color=COLOR_DOWN,
+        )
+    except RuntimeError as error:
+        LOGGER.warning("Alerte de panne de source non envoyée : %s", error)
+        return
+    storage.set_metadata("source_alert_date", today)
+
+
 def scan_stock_events(session=requests):
     """Veille spoilers/réimpressions/Reddit/bans limitée aux cartes du stock.
 
@@ -190,6 +233,8 @@ def scan_stock_events(session=requests):
     result = spoiler_watcher.scan_spoilers_and_trends([], stock_cards, session=session)
     for error in result.get("errors", []):
         LOGGER.warning("Veille marché partielle : %s", error)
+    if result.get("errors"):
+        _notify_source_problem(result["errors"], session=session)
 
     detected = []
     for item in (*result.get("alerts", []), *result.get("events", [])):
@@ -266,6 +311,12 @@ def analyze_stock_prices(session=requests, events=()):
             observed_at=observed_at,
         )
         snapshots_written += 1
+
+        if position.get("target_price") and current_price >= position["target_price"]:
+            target_alert = _create_target_alert(position, current_price, observed_at)
+            if target_alert["id"] not in known_alert_ids:
+                new_alerts.append(target_alert)
+                known_alert_ids.add(target_alert["id"])
 
         if not previous or previous["price_eur"] <= 0:
             continue

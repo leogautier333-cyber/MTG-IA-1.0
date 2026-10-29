@@ -2,13 +2,15 @@ import json
 import hashlib
 import re
 
+from datetime import date
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 import scryfall
 import data_manager
-from services import stock_advisor
+from services import sales_report, stock_advisor
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 
@@ -199,10 +201,11 @@ input[type="radio"] { accent-color: var(--gold) !important; }
 st.title("Magic Trading & Profit Manager")
 
 # Onglets principaux
-tab_stock, tab_search, tab_prices, tab_nexus = st.tabs([
+tab_stock, tab_search, tab_prices, tab_sales, tab_nexus = st.tabs([
     "Stock & Ventes",
     "Recherche & Ajout",
     "Prix & Alertes",
+    "Bilan des ventes",
     "Nexus"
 ])
 
@@ -269,7 +272,7 @@ with tab_stock:
                 )
                 record_index, edit_card = indexed_cards[edit_position]
                 with st.form(f"quick_edit_form_{record_index}"):
-                    edit_quantity, edit_purchase, edit_selling = st.columns(3)
+                    edit_quantity, edit_purchase, edit_selling, edit_target = st.columns(4)
                     quantity_value = edit_quantity.number_input(
                         "Quantité", min_value=1, value=max(1, int(edit_card.get("quantity", 1))), step=1
                     )
@@ -281,11 +284,15 @@ with tab_stock:
                         "Prix de vente unitaire (€)", min_value=0.0,
                         value=float(edit_card.get("selling_price", 0)), step=0.5
                     )
+                    target_value = edit_target.number_input(
+                        "Objectif de vente (€, 0 = aucun)", min_value=0.0,
+                        value=float(edit_card.get("target_price") or 0), step=0.5
+                    )
                     save_quick_edit = st.form_submit_button("Enregistrer", type="primary")
 
                 if save_quick_edit:
                     if data_manager.update_card(
-                        edit_card, quantity_value, purchase_value, selling_value
+                        edit_card, quantity_value, purchase_value, selling_value, target_value
                     ):
                         st.toast("Modifications enregistrées", icon="✅")
                     else:
@@ -695,13 +702,15 @@ with tab_prices:
 
     price_alerts = data_manager.get_price_alerts()
     if price_alerts:
-        st.subheader("Alertes de variation")
+        st.subheader("Alertes du stock")
         st.dataframe(
             [{
                 "Carte": alert.get("card_name"),
-                "Variation": f"{alert.get('change_pct', 0):+.1f} %",
-                "Prix précédent": f"{alert.get('previous_price', 0):.2f} €",
-                "Prix actuel": f"{alert.get('current_price', 0):.2f} €",
+                "Type": alert.get("kind", "PRICE"),
+                "Variation": f"{alert['change_pct']:+.1f} %" if "change_pct" in alert else "—",
+                "Prix précédent": f"{alert['previous_price']:.2f} €" if "previous_price" in alert else "—",
+                "Prix actuel": f"{alert['current_price']:.2f} €" if "current_price" in alert else "—",
+                "Verdict": alert.get("verdict", ""),
                 "État Discord": alert.get("status"),
                 "Date": alert.get("created_at"),
             } for alert in reversed(price_alerts[-50:])],
@@ -711,7 +720,50 @@ with tab_prices:
 
 
 # ===================================================================
-# TAB 4 : NEXUS (watchlist, signaux, backtesting, assistant)
+# TAB 4 : BILAN DES VENTES
+# ===================================================================
+with tab_sales:
+    st.header("Bilan des ventes")
+    sold_lines = sales_report.sale_lines(data_manager.get_collection())
+    if not sold_lines:
+        st.info("Aucune vente enregistrée pour le moment.")
+    else:
+        total = sales_report.summarize(sold_lines)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Cartes vendues", total["cards_sold"])
+        k2.metric("Chiffre d'affaires", f"{total['revenue']:.2f} €")
+        k3.metric("Bénéfice net", f"{total['net_profit']:+.2f} €", f"{total['roi_percent']:+.1f} % ROI")
+        k4.metric("Frais Cardmarket", f"{total['fees']:.2f} €")
+
+        months = sales_report.monthly_summary(data_manager.get_collection())
+        if months:
+            st.subheader("Par mois")
+            st.dataframe(
+                [{
+                    "Mois": m["month"], "Cartes": m["cards_sold"],
+                    "CA (€)": m["revenue"], "Frais (€)": m["fees"],
+                    "Coût (€)": m["cost"], "Bénéfice net (€)": m["net_profit"],
+                    "ROI (%)": m["roi_percent"],
+                } for m in months],
+                hide_index=True, width="stretch",
+            )
+            st.bar_chart(
+                {m["month"]: m["net_profit"] for m in reversed(months)}, y_label="Bénéfice net (€)"
+            )
+
+        st.subheader("Détail des ventes")
+        st.dataframe(
+            [{
+                "Date": line["sold_on"].isoformat() if line["sold_on"] else "—",
+                "Carte": line["name"], "Édition": line["set_code"], "Qté": line["quantity"],
+                "CA (€)": round(line["revenue"], 2), "Bénéfice net (€)": round(line["net_profit"], 2),
+            } for line in sorted(sold_lines, key=lambda l: l["sold_on"] or date.min, reverse=True)],
+            hide_index=True, width="stretch",
+        )
+
+
+# ===================================================================
+# TAB 5 : NEXUS (watchlist, signaux, backtesting, assistant)
 # ===================================================================
 with tab_nexus:
     try:

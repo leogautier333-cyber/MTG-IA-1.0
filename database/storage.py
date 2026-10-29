@@ -480,11 +480,13 @@ def append_inventory_card(card):
         connection.execute(_INSERT_INVENTORY, _inventory_row(card))
 
 
-_EDITABLE_FIELDS = ("quantity", "purchase_price", "selling_price")
+_EDITABLE_FIELDS = ("quantity", "purchase_price", "selling_price", "target_price")
 
 
-def update_inventory_card(original, quantity, purchase_price, selling_price):
-    """Modifie uniquement la ligne identique à `original` ; False si elle a changé entre-temps."""
+def update_inventory_card(original, quantity, purchase_price, selling_price, target_price=None):
+    """Modifie uniquement la ligne identique à `original` ; False si elle a changé entre-temps.
+
+    `target_price` : objectif de vente (0 ou None = aucun objectif)."""
     identity = ("scryfall_id", "foil", "language", "condition", "status", "date_added",
                 *_EDITABLE_FIELDS)
     with _database() as connection:
@@ -500,6 +502,10 @@ def update_inventory_card(original, quantity, purchase_price, selling_price):
                 quantity=int(quantity), purchase_price=float(purchase_price),
                 selling_price=float(selling_price),
             )
+            if target_price:
+                card["target_price"] = float(target_price)
+            else:
+                card.pop("target_price", None)
             connection.execute(
                 """UPDATE inventory SET quantity = ?, purchase_price = ?, selling_price = ?,
                    payload = ? WHERE entry_id = ?""",

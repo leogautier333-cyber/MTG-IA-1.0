@@ -30,6 +30,11 @@ Envoyer une alerte de test sans analyser l'inventaire avec `python -m services.p
 GitHub Actions : `stock_analysis.yml` lance l'analyse deux fois par jour (07:00 et 19:00 UTC, soit 8h/20h en heure d'hiver ; et à la demande) sur la base PostgreSQL, avec les secrets `DATABASE_URL` et `DISCORD_WEBHOOK_URL`. L'analyse ne concerne que le stock en vente : relevé de prix et de rang EDHREC, veille spoilers/réimpressions et Reddit (bans, rumeurs), puis alertes Discord en embeds riches (prix, quantité, contexte, verdict). Le contexte et le verdict viennent de `services/stock_advisor.py` (règles locales, sans API externe). `daily_update.yml` reste un test manuel de livraison Discord. Sans `DATABASE_URL`, le moniteur refuse de tourner sur un runner pour ne pas écrire dans une base SQLite éphémère.
 `backup.yml` crée chaque dimanche à 03:30 UTC (et à la demande) une sauvegarde chiffrée, publiée comme artefact GitHub
 conservé 90 jours (secrets `DATABASE_URL` et `BACKUP_ENCRYPTION_KEY`).
+`weekly_report.yml` envoie chaque lundi à 07:00 UTC un rapport Discord (valeur du stock, plus-value latente, plus fortes hausses/baisses sur 7 jours, ventes de la semaine), construit par `services/weekly_report.py`.
+
+Objectif de prix : le champ « Objectif de vente » de l'édition rapide (`target_price`) déclenche une alerte Discord, une seule fois par valeur d'objectif, quand le prix du marché l'atteint.
+
+Surveillance : les trois workflows envoient un message Discord « [PANNE] » s'ils échouent, et l'analyse prévient (au plus une fois par jour) quand Scryfall ou Reddit ne répondent pas. L'onglet « Bilan des ventes » (`services/sales_report.py`) affiche chiffre d'affaires, frais Cardmarket, bénéfice net et ROI par mois.
 
 ## Tests
 

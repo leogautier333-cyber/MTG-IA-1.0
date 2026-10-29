@@ -60,6 +60,7 @@ def get_popularity_deltas(scryfall_ids):
 save_collection = _invalidating(inventory.save_collection)
 replace_collection = _invalidating(inventory.replace_collection)
 add_card_to_collection = _invalidating(inventory.add_card_to_collection)
+add_cards_to_collection = _invalidating(inventory.add_cards_to_collection)
 mark_card_as_sold = _invalidating(inventory.mark_card_as_sold)
 update_card = _invalidating(inventory.update_card)
 save_watchlist = _invalidating(inventory.save_watchlist)

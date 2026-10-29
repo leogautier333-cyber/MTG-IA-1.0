@@ -43,3 +43,10 @@ Les tests utilisent une base SQLite temporaire et neutralisent `DATABASE_URL` : 
 ## Prochaines étapes
 
 Les commandes slash Discord et l'assistant IA (`agents/`, `ai_engine.py`) ne sont pas branchés sur l'interface. Le découpage de `database/storage.py` est fait en grande partie ; il reste les alertes et la migration JSON à isoler si le fichier grossit.
+## Outils de l'application
+
+- services/github_actions.py : boutons de lancement des workflows (secret Streamlit GITHUB_DISPATCH_TOKEN).
+- services/pricing.py : suggestion de prix (marge minimale + frais Cardmarket 5 %).
+- services/portfolio_history.py : valeur du stock dans le temps depuis les relev�s.
+- services/csv_import.py : import CSV, ajout sans remplacement du stock.
+

@@ -34,8 +34,8 @@ def replace_collection(collection):
     return True
 
 
-def add_card_to_collection(**kwargs):
-    card = {
+def _new_card(**kwargs):
+    return {
         "scryfall_id": kwargs.get("scryfall_id", ""),
         "name": kwargs.get("name", ""),
         "set_code": kwargs.get("set_code", ""),
@@ -55,8 +55,19 @@ def add_card_to_collection(**kwargs):
         "oracle_text": kwargs.get("oracle_text", ""),
         "legalities": kwargs.get("legalities", {}),
     }
-    storage.append_inventory_card(card)
+
+
+def add_card_to_collection(**kwargs):
+    storage.append_inventory_card(_new_card(**kwargs))
     return True
+
+
+def add_cards_to_collection(cards_kwargs):
+    """Ajoute plusieurs cartes d'un coup (import) ; retourne le nombre ajouté."""
+    cards = [_new_card(**kwargs) for kwargs in cards_kwargs]
+    if cards:
+        storage.append_inventory_cards(cards)
+    return len(cards)
 
 
 def mark_card_as_sold(scryfall_id, actual_sale_price):

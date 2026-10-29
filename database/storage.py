@@ -480,6 +480,12 @@ def append_inventory_card(card):
         connection.execute(_INSERT_INVENTORY, _inventory_row(card))
 
 
+def append_inventory_cards(cards):
+    """Ajoute plusieurs cartes en une seule transaction (tout ou rien)."""
+    with _database() as connection:
+        connection.executemany(_INSERT_INVENTORY, [_inventory_row(card) for card in cards])
+
+
 _EDITABLE_FIELDS = ("quantity", "purchase_price", "selling_price", "target_price")
 
 

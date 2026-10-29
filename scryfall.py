@@ -57,6 +57,27 @@ def get_card_prints(oracle_id: str) -> List[Dict[str, Any]]:
     return []
 
 
+def get_cards_by_identifiers(identifiers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Résout des identifiants Scryfall (id, set+numéro, nom) par lots de 75.
+
+    Retourne {"found": [cartes], "not_found": [identifiants introuvables]}.
+    """
+    found, not_found = [], []
+    for i in range(0, len(identifiers), 75):
+        chunk = identifiers[i:i + 75]
+        _rate_limit()
+        response = requests.post(
+            f"{BASE_URL}/cards/collection", json={"identifiers": chunk}, headers=HEADERS
+        )
+        if response.status_code == 200:
+            data = response.json()
+            found.extend(data.get("data", []))
+            not_found.extend(data.get("not_found", []))
+        else:
+            not_found.extend(chunk)
+    return {"found": found, "not_found": not_found}
+
+
 def get_cards_batch(scryfall_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Récupère jusqu'à 75 cartes en une seule requête POST.

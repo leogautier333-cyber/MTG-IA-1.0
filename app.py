@@ -10,7 +10,7 @@ import streamlit as st
 
 import scryfall
 import data_manager
-from services import sales_report, stock_advisor
+from services import csv_import, github_actions, portfolio_history, pricing, sales_report, stock_advisor
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 
@@ -546,6 +546,31 @@ with tab_stock:
 with tab_search:
     st.header("Rechercher et Ajouter une carte")
 
+    with st.expander("Importer un fichier CSV (Cardmarket, tableur…)"):
+        st.caption("Colonnes reconnues : nom, édition, numéro, quantité, prix d'achat, prix de vente, état, langue, foil. Les cartes sont ajoutées au stock sans rien remplacer.")
+        csv_file = st.file_uploader("Fichier CSV", type=["csv"], key="csv_import_file")
+        if csv_file is not None:
+            try:
+                csv_rows, csv_errors = csv_import.parse_csv(csv_file.getvalue().decode("utf-8-sig"))
+            except UnicodeDecodeError:
+                csv_rows, csv_errors = [], ["Fichier illisible : enregistre-le en UTF-8."]
+            if csv_rows:
+                resolved_cards, resolve_errors = csv_import.resolve(csv_rows)
+                csv_errors += resolve_errors
+                if resolved_cards:
+                    st.write(f"{len(resolved_cards)} carte(s) prête(s) à importer :")
+                    st.dataframe(
+                        [{"Carte": c["name"], "Édition": c["set_code"].upper(), "Qté": c["quantity"],
+                          "Achat": c["purchase_price"], "Vente": c["selling_price"]} for c in resolved_cards],
+                        hide_index=True, use_container_width=True,
+                    )
+                    if st.button("Importer ces cartes", type="primary", key="csv_import_go"):
+                        added = data_manager.add_cards_to_collection(resolved_cards)
+                        st.success(f"{added} carte(s) ajoutée(s) au stock.")
+                        st.rerun()
+            for message in csv_errors:
+                st.warning(message)
+
     query = st.text_input("Nom de la carte (FR ou EN) :", placeholder="ex: Sheoldred, Raavan, Atraxa...")
 
     if query and len(query) >= 2:
@@ -717,6 +742,67 @@ with tab_prices:
             hide_index=True,
             use_container_width=True,
         )
+
+    st.divider()
+    st.subheader("Valeur du stock dans le temps")
+    value_points = portfolio_history.value_series(
+        data_manager.get_collection(), data_manager.get_price_history()
+    )
+    if len(value_points) >= 1:
+        value_frame = pd.DataFrame(value_points).rename(
+            columns={"value": "Valeur marché (€)", "cost": "Capital investi (€)"}
+        )
+        st.plotly_chart(
+            px.line(value_frame, x="date", y=["Valeur marché (€)", "Capital investi (€)"], markers=True,
+                    labels={"date": "Date", "value": "€", "variable": ""}),
+            use_container_width=True,
+        )
+    else:
+        st.info("Pas encore de relevés : lance une analyse pour créer le premier point.")
+
+    st.subheader("Suggestion de prix de vente")
+    min_margin = st.slider("Marge nette minimale souhaitée (%)", 0, 100, 15)
+    price_lines = pricing.suggestions(
+        data_manager.get_collection(), data_manager.get_price_history(), float(min_margin)
+    )
+    if price_lines:
+        st.dataframe(
+            [{
+                "Carte": line["name"] + (" ✨" if line["foil"] else ""),
+                "Achat": f"{line['purchase_price']:.2f} €",
+                "Mon prix": f"{line['selling_price']:.2f} €",
+                "Marché": f"{line['market_price']:.2f} €" if line["market_price"] else "—",
+                "Suggestion": f"{line['suggested']:.2f} €" if line["suggested"] else "—",
+                "Avis": line["label"],
+            } for line in price_lines],
+            hide_index=True, use_container_width=True,
+        )
+
+    st.divider()
+    st.subheader("Actions GitHub")
+    if not github_actions.is_configured():
+        st.info(
+            "Pour activer ces boutons : crée un jeton GitHub (Settings → Developer settings → "
+            "Fine-grained tokens) limité à ce dépôt avec la permission « Actions : Read and write », "
+            "puis ajoute dans les Secrets Streamlit : GITHUB_DISPATCH_TOKEN = \"ton_jeton\"."
+        )
+    for workflow_file, workflow_label in github_actions.WORKFLOWS.items():
+        label_col, button_col, status_col = st.columns([2, 2, 3])
+        label_col.write(workflow_label)
+        if button_col.button("Lancer", key=f"gh_run_{workflow_file}", disabled=not github_actions.is_configured()):
+            try:
+                github_actions.trigger(workflow_file)
+                st.session_state[f"gh_msg_{workflow_file}"] = "Lancé sur GitHub (démarre dans quelques secondes)."
+            except github_actions.GitHubActionsError as error:
+                st.session_state[f"gh_msg_{workflow_file}"] = f"Erreur : {error}"
+        if github_actions.is_configured():
+            try:
+                status_col.write(github_actions.run_label(github_actions.latest_run(workflow_file)))
+            except github_actions.GitHubActionsError as error:
+                status_col.write(f"Statut indisponible : {error}")
+        message = st.session_state.get(f"gh_msg_{workflow_file}")
+        if message:
+            st.caption(message)
 
 
 # ===================================================================

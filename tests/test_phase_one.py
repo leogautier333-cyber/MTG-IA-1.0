@@ -121,6 +121,21 @@ class PhaseOneTests(unittest.TestCase):
         self.assertEqual(by_id["new-card"]["actual_sale_price"], 6.5)
         self.assertEqual(by_id["other-card"]["status"], "FOR_SALE")
 
+    def test_quick_edit_updates_only_the_matching_row_and_detects_changes(self):
+        inventory.save_collection([_card("a-card"), _card("b-card")])
+        original = next(c for c in inventory.get_collection() if c["scryfall_id"] == "a-card")
+        self.assertTrue(inventory.update_card(original, 3, 5.5, 12))
+        by_id = {card["scryfall_id"]: card for card in inventory.get_collection()}
+        self.assertEqual(
+            (by_id["a-card"]["quantity"], by_id["a-card"]["purchase_price"], by_id["a-card"]["selling_price"]),
+            (3, 5.5, 12.0),
+        )
+        self.assertEqual(by_id["b-card"]["selling_price"], 10.0)
+        self.assertFalse(inventory.update_card(original, 9, 1, 1))
+        self.assertEqual(
+            {c["scryfall_id"]: c.get("quantity") for c in inventory.get_collection()}["a-card"], 3
+        )
+
     def test_restore_accepts_backups_created_before_price_alerts(self):
         inventory.save_collection([_card()])
         snapshot = database_snapshot.export_database_snapshot()

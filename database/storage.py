@@ -480,6 +480,36 @@ def append_inventory_card(card):
         connection.execute(_INSERT_INVENTORY, _inventory_row(card))
 
 
+_EDITABLE_FIELDS = ("quantity", "purchase_price", "selling_price")
+
+
+def update_inventory_card(original, quantity, purchase_price, selling_price):
+    """Modifie uniquement la ligne identique à `original` ; False si elle a changé entre-temps."""
+    identity = ("scryfall_id", "foil", "language", "condition", "status", "date_added",
+                *_EDITABLE_FIELDS)
+    with _database() as connection:
+        rows = connection.execute(
+            "SELECT entry_id, payload FROM inventory WHERE scryfall_id = ? ORDER BY entry_id",
+            (str(original.get("scryfall_id", "")),),
+        ).fetchall()
+        for row in rows:
+            card = json.loads(row["payload"])
+            if any(card.get(key) != original.get(key) for key in identity):
+                continue
+            card.update(
+                quantity=int(quantity), purchase_price=float(purchase_price),
+                selling_price=float(selling_price),
+            )
+            connection.execute(
+                """UPDATE inventory SET quantity = ?, purchase_price = ?, selling_price = ?,
+                   payload = ? WHERE entry_id = ?""",
+                (card["quantity"], card["purchase_price"], card["selling_price"],
+                 _serialize(card), row["entry_id"]),
+            )
+            return True
+    return False
+
+
 def mark_inventory_sold(scryfall_id, sale_price, sold_at):
     """Marque la plus ancienne copie en vente comme vendue ; retourne False si aucune."""
     with _database() as connection:

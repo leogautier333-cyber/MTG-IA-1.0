@@ -284,12 +284,12 @@ with tab_stock:
                     save_quick_edit = st.form_submit_button("Enregistrer", type="primary")
 
                 if save_quick_edit:
-                    collection[record_index]["quantity"] = int(quantity_value)
-                    collection[record_index]["purchase_price"] = float(purchase_value)
-                    collection[record_index]["selling_price"] = float(selling_value)
-                    data_manager.save_collection(collection)
-                    st.cache_data.clear()
-                    st.toast("Modifications enregistrées", icon="✅")
+                    if data_manager.update_card(
+                        edit_card, quantity_value, purchase_value, selling_value
+                    ):
+                        st.toast("Modifications enregistrées", icon="✅")
+                    else:
+                        st.toast("Carte modifiée ailleurs : données rechargées, réessaie.", icon="⚠️")
                     st.rerun()
 
         if not filtered_cards:

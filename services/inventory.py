@@ -82,6 +82,23 @@ def update_card(original, quantity, purchase_price, selling_price, target_price=
     )
 
 
+def record_decision(original, decision, notes, horizon=""):
+    """Enregistre une décision datée sur une fiche précise du stock."""
+    decision_types = {"Achat", "Conserver", "Vendre", "Vente réalisée"}
+    if decision not in decision_types:
+        raise ValueError("Type de décision invalide.")
+    notes = str(notes or "").strip()
+    if not notes:
+        raise ValueError("Ajoute une justification à la décision.")
+    entry = {
+        "created_at": _now(),
+        "decision": decision,
+        "notes": notes,
+        "horizon": str(horizon or "").strip(),
+    }
+    return storage.append_inventory_decision(original, entry)
+
+
 def calculate_net_margin(selling_price, purchase_price, shipping=0.0, cm_fee_pct=0.05):
     selling_price = float(selling_price or 0)
     purchase_price = float(purchase_price or 0)

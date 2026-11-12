@@ -10,7 +10,10 @@ import streamlit as st
 
 import scryfall
 import data_manager
-from services import csv_import, github_actions, portfolio_history, pricing, sales_report, stock_advisor
+from services import (
+    alert_triage, csv_import, github_actions, portfolio_history, portfolio_metrics,
+    pricing, sales_report, stock_advisor,
+)
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 
@@ -217,6 +220,69 @@ with tab_stock:
     st.header("Tableau de bord & Stock")
 
     collection = data_manager.get_collection()
+    price_history = data_manager.get_price_history()
+    metrics = portfolio_metrics.summarize(collection, price_history)
+    if metrics["cards"]:
+        st.subheader("Vue portefeuille · cartes en vente")
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Coût d'achat", f"{metrics['invested']:.2f} €")
+        metric_cols[1].metric(
+            "Valeur nette estimée", f"{metrics['net_value']:.2f} €",
+            help="Valeur Scryfall diminuée de 5 % de frais estimés. Ce n'est pas un prix de vente garanti.",
+        )
+        metric_cols[2].metric(
+            "Plus-value latente nette", f"{metrics['unrealized_net']:+.2f} €",
+            f"{metrics['roi_pct']:+.1f} % du coût d'achat",
+            help="Estimation après 5 % de frais, avant frais d'expédition ou autres coûts.",
+        )
+        metric_cols[3].metric(
+            "Prix couverts", f"{metrics['coverage_pct']:.0f} %",
+            f"{metrics['missing_prices']} sans prix · {metrics['stale_prices']} anciens (> 7 j)",
+        )
+        if metrics["missing_prices"] or metrics["stale_prices"]:
+            st.caption(
+                f"Valeur brute cotée : {metrics['gross_value']:.2f} €. "
+                "Les cartes sans relevé ne sont pas incluses dans cette valeur; "
+                "les prix sont des références Scryfall indicatives."
+            )
+        exposure_col, stress_col = st.columns([3, 2])
+        with exposure_col:
+            st.caption("Exposition par carte · les 10 plus grosses positions")
+            top_positions = metrics["positions"][:10]
+            if top_positions:
+                exposure_frame = pd.DataFrame(top_positions)
+                exposure_frame["Carte"] = exposure_frame.apply(
+                    lambda row: f"{row['name']} · {row['set_code']}", axis=1
+                )
+                st.plotly_chart(
+                    px.bar(exposure_frame, x="market_value", y="Carte", orientation="h",
+                           labels={"market_value": "Valeur marché (€)"})
+                    .update_layout(yaxis={"categoryorder": "total ascending"}),
+                    use_container_width=True,
+                )
+            if metrics["set_exposure"]:
+                st.caption("Exposition par édition")
+                st.dataframe(
+                    [{
+                        "Édition": set_code, "Valeur (€)": round(value, 2),
+                        "Part du portefeuille": f"{value / metrics['gross_value'] * 100:.1f}%"
+                        if metrics["gross_value"] else "—",
+                    } for set_code, value in metrics["set_exposure"]],
+                    hide_index=True, use_container_width=True,
+                )
+        with stress_col:
+            st.caption("Scénarios de baisse (simulation, pas une prévision)")
+            st.dataframe(
+                [{
+                    "Baisse": f"-{scenario['drop_pct']}%",
+                    "Valeur nette": f"{scenario['value_after_fees']:.2f} €",
+                    "Écart actuel": f"{scenario['change_vs_now']:+.2f} €",
+                    "Vs achat": f"{scenario['profit_vs_cost']:+.2f} €",
+                } for scenario in metrics["scenarios"]],
+                hide_index=True, use_container_width=True,
+            )
+        st.divider()
+
     indexed_cards = []
     filtered_cards = []
 
@@ -462,6 +528,41 @@ with tab_stock:
                                 st.rerun()
                             else:
                                 st.error("Erreur lors de la mise à jour.")
+
+                    st.divider()
+                    st.subheader("Journal de décision")
+                    with st.form(f"decision_journal_{selected_idx}_{card.get('scryfall_id')}"):
+                        decision_type = st.selectbox(
+                            "Décision",
+                            ["Conserver", "Achat", "Vendre", "Vente réalisée"],
+                            index=0,
+                        )
+                        decision_horizon = st.text_input(
+                            "Horizon ou objectif", placeholder="Ex. jusqu'à la prochaine extension"
+                        )
+                        decision_notes = st.text_area(
+                            "Pourquoi cette décision ?", placeholder="Thèse d'achat, raison de conserver ou de vendre…"
+                        )
+                        save_decision = st.form_submit_button("Ajouter au journal")
+                    if save_decision:
+                        try:
+                            if data_manager.record_decision(
+                                card, decision_type, decision_notes, decision_horizon
+                            ):
+                                st.success("Décision ajoutée au journal.")
+                                st.rerun()
+                            else:
+                                st.warning("Cette fiche a changé depuis son affichage. Recharge la page et réessaie.")
+                        except ValueError as error:
+                            st.error(str(error))
+                    journal = card.get("decision_journal", [])
+                    if journal:
+                        for item in reversed(journal):
+                            st.markdown(
+                                f"**{item.get('created_at', '')[:10]} · {item.get('decision', '')}**"
+                                + (f" · {item['horizon']}" if item.get("horizon") else "")
+                                + f"\n\n{item.get('notes', '')}"
+                            )
 
                 # Historique de prix
                 price_hist = data_manager.get_variant_price_history(
@@ -728,17 +829,25 @@ with tab_prices:
     price_alerts = data_manager.get_price_alerts()
     if price_alerts:
         st.subheader("Alertes du stock")
+        prioritized_alerts = alert_triage.prioritize(
+            price_alerts, data_manager.get_collection(), data_manager.get_price_history()
+        )
         st.dataframe(
             [{
                 "Carte": alert.get("card_name"),
                 "Type": alert.get("kind", "PRICE"),
+                "Priorité": alert["priority"],
                 "Variation": f"{alert['change_pct']:+.1f} %" if "change_pct" in alert else "—",
                 "Prix précédent": f"{alert['previous_price']:.2f} €" if "previous_price" in alert else "—",
                 "Prix actuel": f"{alert['current_price']:.2f} €" if "current_price" in alert else "—",
+                "Impact estimé": f"{alert['impact_eur']:.2f} €" if alert["impact_eur"] is not None else "À évaluer",
+                "Part du stock": f"{alert['portfolio_share_pct']:.1f} %",
+                "Fraîcheur": alert["freshness"],
+                "Fiabilité": alert["reliability"],
                 "Verdict": alert.get("verdict", ""),
                 "État Discord": alert.get("status"),
                 "Date": alert.get("created_at"),
-            } for alert in reversed(price_alerts[-50:])],
+            } for alert in prioritized_alerts[:50]],
             hide_index=True,
             use_container_width=True,
         )
@@ -810,16 +919,28 @@ with tab_prices:
 # ===================================================================
 with tab_sales:
     st.header("Bilan des ventes")
-    sold_lines = sales_report.sale_lines(data_manager.get_collection())
+    sales_collection = data_manager.get_collection()
+    sold_lines = sales_report.compare_to_market(
+        sales_report.sale_lines(sales_collection), data_manager.get_price_history()
+    )
     if not sold_lines:
         st.info("Aucune vente enregistrée pour le moment.")
     else:
         total = sales_report.summarize(sold_lines)
-        k1, k2, k3, k4 = st.columns(4)
+        k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Cartes vendues", total["cards_sold"])
         k2.metric("Chiffre d'affaires", f"{total['revenue']:.2f} €")
         k3.metric("Bénéfice net", f"{total['net_profit']:+.2f} €", f"{total['roi_percent']:+.1f} % ROI")
         k4.metric("Frais Cardmarket", f"{total['fees']:.2f} €")
+        if total["market_compared_sales"]:
+            k5.metric(
+                "Ventes vs référence marché",
+                f"{total['sale_vs_market']:+.2f} €",
+                f"{total['market_compared_sales']} vente(s) comparée(s)",
+                help="Écart au dernier prix Scryfall connu à la date de vente; comparaison indicative.",
+            )
+        else:
+            k5.metric("Ventes vs référence marché", "—", "aucun prix historique exploitable")
 
         months = sales_report.monthly_summary(data_manager.get_collection())
         if months:
@@ -843,6 +964,11 @@ with tab_sales:
                 "Date": line["sold_on"].isoformat() if line["sold_on"] else "—",
                 "Carte": line["name"], "Édition": line["set_code"], "Qté": line["quantity"],
                 "CA (€)": round(line["revenue"], 2), "Bénéfice net (€)": round(line["net_profit"], 2),
+                "Référence marché (€)": round(line["market_reference"], 2)
+                if line["market_reference"] is not None else "—",
+                "Écart vs marché (€)": line["sale_vs_market"]
+                if line["sale_vs_market"] is not None else "—",
+                "Date référence": line["market_reference_day"] or "—",
             } for line in sorted(sold_lines, key=lambda l: l["sold_on"] or date.min, reverse=True)],
             hide_index=True, width="stretch",
         )

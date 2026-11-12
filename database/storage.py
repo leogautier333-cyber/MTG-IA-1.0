@@ -522,6 +522,31 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
     return False
 
 
+def append_inventory_decision(original, decision):
+    """Ajoute une entrée au journal de décision de la ligne d'inventaire correspondante."""
+    identity = (
+        "scryfall_id", "foil", "language", "condition", "status", "date_added",
+        "set_code", "collector_number", "quantity", "purchase_price", "selling_price",
+    )
+    with _database() as connection:
+        rows = connection.execute(
+            "SELECT entry_id, payload FROM inventory WHERE scryfall_id = ? ORDER BY entry_id",
+            (str(original.get("scryfall_id", "")),),
+        ).fetchall()
+        for row in rows:
+            card = json.loads(row["payload"])
+            if any(card.get(key) != original.get(key) for key in identity):
+                continue
+            journal = card.setdefault("decision_journal", [])
+            journal.append(decision)
+            connection.execute(
+                "UPDATE inventory SET payload = ? WHERE entry_id = ?",
+                (_serialize(card), row["entry_id"]),
+            )
+            return True
+    return False
+
+
 def mark_inventory_sold(scryfall_id, sale_price, sold_at):
     """Marque la plus ancienne copie en vente comme vendue ; retourne False si aucune."""
     with _database() as connection:

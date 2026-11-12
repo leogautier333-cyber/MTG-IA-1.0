@@ -1,8 +1,15 @@
 import os
+import tempfile
 import unittest
+from datetime import date
+from pathlib import Path
 from unittest import mock
 
-from services import csv_import, github_actions, portfolio_history, pricing
+from database import storage
+from services import (
+    alert_triage, csv_import, github_actions, inventory, portfolio_history,
+    portfolio_metrics, pricing, sales_report,
+)
 
 
 class PricingTests(unittest.TestCase):
@@ -30,6 +37,103 @@ class PortfolioTests(unittest.TestCase):
         series = portfolio_history.value_series(cards, history)
         self.assertEqual(series[0], {"date": "2026-01-01", "value": 20.0, "cost": 10.0})
         self.assertEqual(series[1]["value"], 0.0)
+
+    def test_metrics_cover_only_current_stock_and_flag_missing_stale_prices(self):
+        collection = [
+            {"scryfall_id": "a", "name": "A", "set_code": "SET", "quantity": 2,
+             "purchase_price": 5, "status": "FOR_SALE", "date_added": "2026-01-01"},
+            {"scryfall_id": "b", "name": "B", "quantity": 1,
+             "purchase_price": 4, "status": "FOR_SALE"},
+            {"scryfall_id": "c", "quantity": 1, "purchase_price": 3, "status": "SOLD"},
+        ]
+        history = {"a": {"2026-11-10": {"eur": 10}}}
+        metrics = portfolio_metrics.summarize(collection, history, today=date(2026, 11, 12))
+        self.assertEqual(metrics["invested"], 14)
+        self.assertEqual(metrics["gross_value"], 20)
+        self.assertEqual(metrics["net_value"], 19)
+        self.assertEqual(metrics["missing_prices"], 1)
+        self.assertEqual(metrics["coverage_pct"], 50)
+        self.assertEqual([item["drop_pct"] for item in metrics["scenarios"]], [10, 20, 30])
+
+    def test_metrics_aggregate_same_card_positions(self):
+        collection = [
+            {"scryfall_id": "a", "foil": False, "name": "A", "quantity": 1,
+             "purchase_price": 2, "status": "FOR_SALE"},
+            {"scryfall_id": "a", "foil": False, "name": "A", "quantity": 3,
+             "purchase_price": 4, "status": "FOR_SALE"},
+        ]
+        metrics = portfolio_metrics.summarize(
+            collection, {"a": {"2026-11-12": {"eur": 10}}}, today=date(2026, 11, 12)
+        )
+        self.assertEqual(len(metrics["positions"]), 1)
+        self.assertEqual(metrics["positions"][0]["quantity"], 4)
+        self.assertEqual(metrics["positions"][0]["market_value"], 40)
+
+    def test_alert_triage_ranks_large_stock_impact_and_marks_rumor(self):
+        collection = [{
+            "scryfall_id": "a", "foil": False, "quantity": 10, "status": "FOR_SALE",
+        }]
+        history = {"a": {"2026-11-12": {"eur": 10}}}
+        alerts = [
+            {"kind": "PRICE", "scryfall_id": "a", "foil": False, "quantity": 10,
+             "previous_price": 10, "current_price": 8, "created_at": "2026-11-12"},
+            {"kind": "REDDIT_HYPE", "scryfall_id": "a", "created_at": "2026-11-12"},
+        ]
+        ranked = alert_triage.prioritize(alerts, collection, history, today=date(2026, 11, 12))
+        self.assertEqual(ranked[0]["impact_eur"], 20)
+        self.assertEqual(ranked[0]["priority"], "À traiter en priorité")
+        self.assertIn("rumeur", ranked[1]["reliability"])
+        foil_event = alert_triage.prioritize(
+            [{"kind": "SPOILER_REPRINT", "scryfall_id": "foil-only",
+              "created_at": "2026-11-12"}],
+            [{"scryfall_id": "foil-only", "foil": True, "quantity": 2, "status": "FOR_SALE"}],
+            {"foil-only": {"2026-11-12": {"eur_foil": 15}}},
+            today=date(2026, 11, 12),
+        )[0]
+        self.assertEqual(foil_event["priority"], "À surveiller de près")
+        historical = alert_triage.prioritize(
+            [{"kind": "PRICE", "scryfall_id": "sold", "quantity": 3,
+              "previous_price": 10, "current_price": 20, "created_at": "2026-11-12"}],
+            collection, history, today=date(2026, 11, 12),
+        )[0]
+        self.assertIsNone(historical["impact_eur"])
+        self.assertEqual(historical["priority"], "Historique · hors stock")
+
+
+class DecisionJournalTests(unittest.TestCase):
+    def test_decision_is_persisted_on_matching_inventory_record(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(storage, "DATABASE_PATH", Path(directory) / "decisions.sqlite3"), \
+             mock.patch.object(storage, "DATABASE_URL", None), \
+             mock.patch.dict(os.environ, {"DATABASE_URL": "", "MTG_DATABASE_URL": ""}):
+            inventory.add_card_to_collection(
+                scryfall_id="journal-card", name="Journal Card", set_code="tst",
+                purchase_price=2, selling_price=5,
+            )
+            card = inventory.get_collection()[0]
+            self.assertTrue(inventory.record_decision(card, "Conserver", "La demande reste stable", "3 mois"))
+            updated = inventory.get_collection()[0]["decision_journal"][0]
+            self.assertEqual(updated["decision"], "Conserver")
+            self.assertEqual(updated["horizon"], "3 mois")
+            with self.assertRaises(ValueError):
+                inventory.record_decision(card, "Inconnu", "raison")
+
+
+class SaleMarketComparisonTests(unittest.TestCase):
+    def test_sale_compares_against_latest_price_known_at_sale_date(self):
+        collection = [{
+            "scryfall_id": "sold", "name": "Sold Card", "set_code": "SET",
+            "status": "SOLD", "quantity": 2, "purchase_price": 3,
+            "actual_sale_price": 12, "date_sold": "2026-11-10T12:00:00",
+        }]
+        history = {"sold": {
+            "2026-11-08": {"eur": 5},
+            "2026-11-11": {"eur": 9},
+        }}
+        lines = sales_report.compare_to_market(sales_report.sale_lines(collection), history)
+        self.assertEqual(lines[0]["market_reference"], 5)
+        self.assertEqual(lines[0]["sale_vs_market"], 14)
+        self.assertEqual(sales_report.summarize(lines)["market_compared_sales"], 1)
 
 
 class CsvImportTests(unittest.TestCase):

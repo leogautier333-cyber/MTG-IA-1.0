@@ -23,6 +23,8 @@ def sale_lines(collection):
         margin = calculate_net_margin(sale_price, purchase_price)
         lines.append({
             "name": card.get("name", "Carte inconnue"),
+            "scryfall_id": str(card.get("scryfall_id", "")),
+            "foil": bool(card.get("foil")),
             "set_code": str(card.get("set_code", "")).upper(),
             "sold_on": _sold_day(card),
             "quantity": quantity,
@@ -31,6 +33,28 @@ def sale_lines(collection):
             "cost": purchase_price * quantity,
             "net_profit": margin["net_profit"] * quantity,
         })
+    return lines
+
+
+def compare_to_market(lines, price_history):
+    """Compare le prix réellement obtenu au dernier snapshot connu au plus tard le jour de vente."""
+    for line in lines:
+        sold_day = line["sold_on"].isoformat() if line["sold_on"] else None
+        days = price_history.get(line["scryfall_id"], {}) if sold_day else {}
+        key = "eur_foil" if line["foil"] else "eur"
+        known_days = [
+            day for day, point in days.items()
+            if day <= sold_day and point.get(key) is not None
+        ]
+        reference_day = max(known_days, default=None)
+        reference = days[reference_day].get(key) if reference_day else None
+        actual = line["revenue"] / line["quantity"]
+        line["market_reference"] = float(reference) if reference is not None else None
+        line["market_reference_day"] = reference_day
+        line["sale_vs_market"] = (
+            round((actual - float(reference)) * line["quantity"], 2)
+            if reference is not None else None
+        )
     return lines
 
 
@@ -44,6 +68,12 @@ def summarize(lines):
         "fees": round(sum(line["fees"] for line in lines), 2),
         "cost": round(cost, 2),
         "net_profit": round(net_profit, 2),
+        "sale_vs_market": round(sum(
+            line.get("sale_vs_market") or 0 for line in lines
+        ), 2),
+        "market_compared_sales": sum(
+            1 for line in lines if line.get("market_reference") is not None
+        ),
         "roi_percent": round(net_profit / cost * 100, 1) if cost > 0 else 0.0,
     }
 

@@ -47,6 +47,15 @@ Les commandes slash Discord et l'assistant IA (`agents/`, `ai_engine.py`) ne son
 
 - services/github_actions.py : boutons de lancement des workflows (secret Streamlit GITHUB_DISPATCH_TOKEN).
 - services/pricing.py : suggestion de prix (marge minimale + frais Cardmarket 5 %).
-- services/portfolio_history.py : valeur du stock dans le temps depuis les relev�s.
+- services/portfolio_history.py : historique des prix et valeur du stock au fil du temps.
 - services/csv_import.py : import CSV, ajout sans remplacement du stock.
 
+## Analyse financière du stock
+
+`services/portfolio_metrics.py` calcule couverture, exposition et scénarios; `services/alert_triage.py` classe les alertes; `services/inventory.py` et `database/storage.py` conservent le journal dans la fiche de stock; `services/sales_report.py` compare les ventes à la référence historique.
+
+L'onglet « Stock & Ventes » affiche le coût d'achat du stock en vente, la valeur cotée après une provision de 5 % de frais, la plus-value latente nette, la couverture et l'ancienneté des relevés. Les cartes sans prix sont comptées dans le coût investi, mais pas dans la valeur cotée; l'interface le signale. Les expositions par carte et édition et les baisses de 10/20/30 % sont des vues descriptives, pas des prévisions.
+
+Les alertes de l'onglet « Prix & Alertes » sont triées par impact estimé sur la quantité détenue, part de portefeuille et fraîcheur. Les alertes communautaires restent qualifiées de rumeurs/événements à confirmer; les prix Scryfall sont des références indicatives.
+
+Chaque fiche de stock peut conserver un journal daté (décision, justification, horizon) dans son payload PostgreSQL/SQLite existant, sans migration de schéma. Le bilan des ventes compare le prix réalisé au dernier relevé connu au plus tard à la date de vente; l'écart est indicatif, ne représente pas nécessairement un prix exécutable.

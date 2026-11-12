@@ -233,6 +233,17 @@ with tab_stock:
                 f"Prix d'achat inconnu pour {unknown_costs} ligne(s) importée(s) : "
                 "les coûts et bénéfices affichés sont incomplets. Renseigne-les dans l'édition rapide."
             )
+        unresolved = [
+            card for card in collection
+            if card.get("status", "FOR_SALE") == "FOR_SALE"
+            and card.get("scryfall_resolution_pending")
+        ]
+        if unresolved:
+            st.warning(
+                f"{len(unresolved)} ligne(s) sans correspondance Scryfall exacte : "
+                + ", ".join(card.get("name", "Carte") for card in unresolved)
+                + ". Le suivi de prix et la vente dans l'application sont indisponibles pour ces cartes."
+            )
         metric_cols = st.columns(4)
         metric_cols[0].metric("Coût d'achat", f"{metrics['invested']:.2f} €")
         metric_cols[1].metric(
@@ -386,7 +397,7 @@ with tab_stock:
 
             for idx, card in enumerate(filtered_cards):
                 scryfall_data = None
-                if card.get("name") and (not card.get("image_url") or not card.get("mana_cost")):
+                if card.get("name") and not card.get("scryfall_resolution_pending") and (not card.get("image_url") or not card.get("mana_cost")):
                     scryfall_data = scryfall.get_card_by_name(card["name"])
                 img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
                 if not img_url and scryfall_data and "card_faces" in scryfall_data:
@@ -422,7 +433,7 @@ with tab_stock:
                         st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
                             popularity_by_card.get(str(card.get("scryfall_id")))
                         ))
-                        if target_status == "FOR_SALE":
+                        if target_status == "FOR_SALE" and card.get("scryfall_id"):
                             with st.popover("Vendre", use_container_width=True):
                                 actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{idx}")
                                 if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{idx}", type="primary"):
@@ -474,7 +485,7 @@ with tab_stock:
                 col_img, col_info = st.columns([1, 2])
 
                 scryfall_data = None
-                if card.get("name") and (
+                if card.get("name") and not card.get("scryfall_resolution_pending") and (
                     not card.get("image_url") or not card.get("mana_cost")
                     or not card.get("type_line") or not card.get("oracle_text")
                 ):
@@ -522,7 +533,7 @@ with tab_stock:
                             badge = "🟢 **LEGAL**" if status == "legal" else "⚪ **NOT LEGAL**"
                             leg_cols[idx % 2].markdown(f"{badge} `{fmt.capitalize()}`")
 
-                    if target_status == "FOR_SALE":
+                    if target_status == "FOR_SALE" and card.get("scryfall_id"):
                         st.divider()
                         st.subheader("Marquer comme vendue")
                         sale_price = st.number_input(
@@ -696,12 +707,22 @@ with tab_search:
                 except (UnicodeDecodeError, ValueError, RuntimeError) as error:
                     st.error(f"Préparation impossible : {error}")
             if prepared:
+                unresolved_cards = [
+                    card for card in prepared["cards"] if card.get("scryfall_resolution_pending")
+                ]
+                if unresolved_cards:
+                    st.warning(
+                        "Sans correspondance Scryfall exacte (pas de suivi de prix ni vente dans l'application) : "
+                        + ", ".join(card["name"] for card in unresolved_cards)
+                        + ". Ces lignes seront conservées avec les données Cardmarket, sans associer une impression au hasard."
+                    )
                 st.dataframe(
                     [{
                         "Carte": card["name"], "Édition": card["set_code"].upper(),
                         "Qté": card["quantity"], "Langue": card["language"],
                         "État": card["condition"], "Foil": card["foil"],
                         "Prix de vente (€)": card["selling_price"],
+                        "Scryfall": "Non identifié" if card.get("scryfall_resolution_pending") else "Identifié",
                     } for card in prepared["cards"]],
                     hide_index=True, use_container_width=True,
                 )

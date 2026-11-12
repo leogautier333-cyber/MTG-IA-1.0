@@ -30,7 +30,7 @@ Tous peuvent être lancés à la main depuis l'onglet « Prix & Alertes » de l'
 
 ## Synchroniser le stock Cardmarket
 
-Dans « Recherche & Ajout » → « Synchroniser mon stock Cardmarket », dépose l'export CSV complet de Cardmarket, lance la vérification, contrôle l'aperçu puis confirme le remplacement du stock en vente. L'identification précise des impressions repose sur les identifiants produit Cardmarket et nécessite une connexion à Scryfall. Une carte introuvable ou une erreur empêche tout remplacement ; le stock précédent reste intact.
+Dans « Recherche & Ajout » → « Synchroniser mon stock Cardmarket », dépose l'export CSV complet de Cardmarket, lance la vérification, contrôle l'aperçu puis confirme le remplacement du stock en vente. L'identification précise des impressions repose sur les identifiants produit Cardmarket et nécessite une connexion à Scryfall. Une erreur de connexion ou réponse invalide empêche le remplacement. Une carte introuvable dans Scryfall est signalée et conservée sans association approximative : ni suivi de prix ni vente dans l'application ne sont disponibles pour cette ligne tant qu'elle n'est pas identifiée.
 
 Les noms français de l'export n'ont pas besoin d'être traduits : la recherche utilise l'identifiant produit. L'import CSV générique n'est pas destiné aux exports Cardmarket et indique la section à utiliser lorsqu'il en reconnaît un.
 

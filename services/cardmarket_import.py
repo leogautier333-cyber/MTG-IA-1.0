@@ -74,6 +74,7 @@ def parse(text):
         rows.append({
             "article_id": article_id, "product_id": product_id,
             "name": raw["Name"].strip(), "set_code": raw["SetCode"].strip(),
+            "collector_number": (raw.get("CollectorNumber") or "").strip(),
             "language": language_code, "condition": raw["Condition"].strip().upper(),
             "foil": foil == "Y", "quantity": quantity, "selling_price": price,
         })
@@ -83,7 +84,7 @@ def parse(text):
 
 
 def resolve(rows, session=requests):
-    """Résout exactement chaque produit via Scryfall; refuse un import partiel."""
+    """Identifie les produits exacts, en signalant les produits absents de Scryfall."""
     products = {}
     errors = []
     for product_id in dict.fromkeys(row["product_id"] for row in rows):
@@ -96,7 +97,7 @@ def resolve(rows, session=requests):
         except requests.RequestException as error:
             raise RuntimeError(f"Scryfall inaccessible ({type(error).__name__}) ; stock inchangé.") from None
         if response.status_code == 404:
-            errors.append(f"Produit Cardmarket {product_id} introuvable sur Scryfall.")
+            products[product_id] = None
             continue
         if response.status_code != 200:
             raise RuntimeError(
@@ -112,6 +113,18 @@ def resolve(rows, session=requests):
     cards = []
     for row in rows:
         card = products[row["product_id"]]
+        if card is None:
+            cards.append({
+                "scryfall_id": "", "scryfall_resolution_pending": True,
+                "name": row["name"], "set_code": row["set_code"].lower(),
+                "collector_number": row["collector_number"],
+                "language": row["language"], "condition": row["condition"], "foil": row["foil"],
+                "quantity": row["quantity"], "selling_price": row["selling_price"],
+                "cardmarket_article_id": row["article_id"], "cardmarket_product_id": row["product_id"],
+                "image_url": "", "mana_cost": "", "type_line": "", "oracle_text": "",
+                "legalities": {},
+            })
+            continue
         image = (card.get("image_uris") or {}).get("normal")
         if not image:
             image = next(
@@ -120,7 +133,8 @@ def resolve(rows, session=requests):
                 "",
             )
         cards.append({
-            "scryfall_id": card["id"], "name": card.get("name") or row["name"],
+            "scryfall_id": card["id"], "scryfall_resolution_pending": False,
+            "name": card.get("name") or row["name"],
             "set_code": card.get("set", ""), "collector_number": card.get("collector_number", ""),
             "language": row["language"], "condition": row["condition"], "foil": row["foil"],
             "quantity": row["quantity"], "selling_price": row["selling_price"],

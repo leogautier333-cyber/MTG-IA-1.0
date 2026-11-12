@@ -531,7 +531,8 @@ def synchronize_cardmarket_stock(cards, expected_collection, synced_at):
             article = str(incoming["cardmarket_article_id"])
             matches = [(entry_id, card) for entry_id, card in active
                        if str(card.get("cardmarket_article_id", "")) == article]
-            if not matches and old_variants.get(variant(incoming)) == 1 and new_variants[variant(incoming)] == 1:
+            if (not matches and incoming.get("scryfall_id")
+                    and old_variants.get(variant(incoming)) == 1 and new_variants[variant(incoming)] == 1):
                 matches = [(entry_id, card) for entry_id, card in active
                            if not card.get("cardmarket_article_id") and variant(card) == variant(incoming)]
             if matches and matches[0][0] not in used:
@@ -577,7 +578,7 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
     """Modifie uniquement la ligne identique à `original` ; False si elle a changé entre-temps.
 
     `target_price` : objectif de vente (0 ou None = aucun objectif)."""
-    identity = ("scryfall_id", "foil", "language", "condition", "status", "date_added",
+    identity = ("scryfall_id", "cardmarket_article_id", "foil", "language", "condition", "status", "date_added",
                 *_EDITABLE_FIELDS)
     with _database() as connection:
         rows = connection.execute(
@@ -611,7 +612,7 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
 def append_inventory_decision(original, decision):
     """Ajoute une entrée au journal de décision de la ligne d'inventaire correspondante."""
     identity = (
-        "scryfall_id", "foil", "language", "condition", "status", "date_added",
+        "scryfall_id", "cardmarket_article_id", "foil", "language", "condition", "status", "date_added",
         "set_code", "collector_number", "quantity", "purchase_price", "selling_price",
     )
     with _database() as connection:

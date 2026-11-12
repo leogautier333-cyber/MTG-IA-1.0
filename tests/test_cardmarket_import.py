@@ -49,7 +49,7 @@ class CardmarketImportTests(unittest.TestCase):
                 cardmarket_import.parse(value)
 
     @patch("services.cardmarket_import.time.sleep")
-    def test_resolve_deduplicates_products_and_refuses_partial_results(self, _sleep):
+    def test_resolve_deduplicates_products_and_marks_unknown(self, _sleep):
         rows = cardmarket_import.parse(HEADER + export_line() + export_line(article="101"))
         session = Mock()
         session.get.return_value = Mock(
@@ -69,8 +69,20 @@ class CardmarketImportTests(unittest.TestCase):
         self.assertEqual(cards[0]["name"], "Card")
         session.get.return_value.status_code = 404
         cards, errors = cardmarket_import.resolve(rows, session)
-        self.assertEqual(cards, [])
-        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(cards), 2)
+        self.assertTrue(cards[0]["scryfall_resolution_pending"])
+        self.assertEqual(cards[0]["scryfall_id"], "")
+        self.assertEqual(cards[0]["name"], "Carte")
+
+    @patch("services.cardmarket_import.time.sleep")
+    def test_malformed_response_is_rejected(self, _sleep):
+        rows = cardmarket_import.parse(HEADER + export_line())
+        session = Mock()
+        session.get.return_value = Mock(status_code=200, json=Mock(return_value={"id": "bad"}))
+        cards, errors = cardmarket_import.resolve(rows, session)
+        self.assertFalse(cards)
+        self.assertTrue(errors)
 
 
 class StockSynchronizationTests(unittest.TestCase):
@@ -137,6 +149,16 @@ class StockSynchronizationTests(unittest.TestCase):
                 [resolved(quantity=7), resolved("101", "999", "card-2")], before, "2026-11-12"
             )
         self.assertEqual(inventory.get_collection(), before)
+
+    def test_unresolved_article_can_be_resolved_in_later_import(self):
+        unresolved = {**resolved(), "scryfall_id": "", "scryfall_resolution_pending": True}
+        storage.synchronize_cardmarket_stock([unresolved], [], "2026-11-12")
+        before = inventory.get_collection()
+        incoming = {**resolved(), "scryfall_resolution_pending": False}
+        result = storage.synchronize_cardmarket_stock([incoming], before, "2026-11-13")
+        self.assertEqual(result["matched"], 1)
+        self.assertEqual(inventory.get_collection()[0]["scryfall_id"], "card-1")
+        self.assertFalse(inventory.get_collection()[0]["scryfall_resolution_pending"])
 
 
 if __name__ == "__main__":

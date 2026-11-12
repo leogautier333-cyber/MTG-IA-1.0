@@ -34,7 +34,7 @@ Dans « Recherche & Ajout » → « Synchroniser mon stock Cardmarket », dépos
 
 Les noms français de l'export n'ont pas besoin d'être traduits : la recherche utilise l'identifiant produit. L'import CSV générique n'est pas destiné aux exports Cardmarket et indique la section à utiliser lorsqu'il en reconnaît un.
 
-Les fiches correspondantes conservent notamment leur prix d'achat et leur journal. Les cartes absentes sont retirées du stock actif, sans être considérées comme vendues ; les ventes et les relevés restent conservés. Cardmarket n'indique pas le prix d'achat : pour les nouvelles fiches, il est inconnu et doit être renseigné dans l'édition rapide. Les estimations de bénéfices sont incomplètes en attendant. L'export CSV de l'application est téléchargeable dans « Stock & Ventes » → « Export / Import » ; il ne remplace pas l'export Cardmarket attendu pour la synchronisation.
+Les fiches correspondantes conservent notamment leur prix d'achat et leur journal. Les cartes absentes sont retirées du stock actif, sans être considérées comme vendues ; les ventes et les relevés restent conservés. Cardmarket n'indique pas le prix d'achat : il reste inconnu pour les nouvelles fiches. Le tableau de stock affiche la valeur aux prix de vente enregistrés, indépendamment des prix d'achat. L'export CSV de l'application est téléchargeable dans « Stock & Ventes » → « Export / Import » ; il ne remplace pas l'export Cardmarket attendu pour la synchronisation.
 
 ## Tests
 

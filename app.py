@@ -223,16 +223,7 @@ with tab_stock:
     price_history = data_manager.get_price_history()
     metrics = portfolio_metrics.summarize(collection, price_history)
     if metrics["cards"]:
-        st.subheader("Vue portefeuille · cartes en vente")
-        unknown_costs = sum(
-            1 for card in collection
-            if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("purchase_price_unknown")
-        )
-        if unknown_costs:
-            st.warning(
-                f"Prix d'achat inconnu pour {unknown_costs} ligne(s) importée(s) : "
-                "les coûts et bénéfices affichés sont incomplets. Renseigne-les dans l'édition rapide."
-            )
+        st.subheader("Vue du stock · cartes en vente")
         unresolved = [
             card for card in collection
             if card.get("status", "FOR_SALE") == "FOR_SALE"
@@ -245,15 +236,18 @@ with tab_stock:
                 + ". Le suivi de prix et la vente dans l'application sont indisponibles pour ces cartes."
             )
         metric_cols = st.columns(4)
-        metric_cols[0].metric("Coût d'achat", f"{metrics['invested']:.2f} €")
+        metric_cols[0].metric("Cartes en stock", f"{metrics['copies']} exemplaires",
+                              f"{metrics['cards']} lignes")
         metric_cols[1].metric(
-            "Valeur nette estimée", f"{metrics['net_value']:.2f} €",
-            help="Valeur Scryfall diminuée de 5 % de frais estimés. Ce n'est pas un prix de vente garanti.",
+            "Valeur aux prix de vente", f"{metrics['asking_value']:.2f} €",
+            help="Somme des prix de vente unitaires enregistrés, multipliés par les quantités. "
+                 "Ce montant ne garantit pas une vente.",
         )
         metric_cols[2].metric(
-            "Plus-value latente nette", f"{metrics['unrealized_net']:+.2f} €",
-            f"{metrics['roi_pct']:+.1f} % du coût d'achat",
-            help="Estimation après 5 % de frais, avant frais d'expédition ou autres coûts.",
+            "Valeur marché estimée",
+            f"{metrics['gross_value']:.2f} €" if metrics["coverage_pct"] else "—",
+            help="Somme des derniers relevés Scryfall disponibles, multipliés par les quantités. "
+                 "Elle peut être incomplète et ne garantit pas une vente.",
         )
         metric_cols[3].metric(
             "Prix couverts", f"{metrics['coverage_pct']:.0f} %",
@@ -261,7 +255,6 @@ with tab_stock:
         )
         if metrics["missing_prices"] or metrics["stale_prices"]:
             st.caption(
-                f"Valeur brute cotée : {metrics['gross_value']:.2f} €. "
                 "Les cartes sans relevé ne sont pas incluses dans cette valeur; "
                 "les prix sont des références Scryfall indicatives."
             )
@@ -291,16 +284,18 @@ with tab_stock:
                     hide_index=True, use_container_width=True,
                 )
         with stress_col:
-            st.caption("Scénarios de baisse (simulation, pas une prévision)")
-            st.dataframe(
-                [{
-                    "Baisse": f"-{scenario['drop_pct']}%",
-                    "Valeur nette": f"{scenario['value_after_fees']:.2f} €",
-                    "Écart actuel": f"{scenario['change_vs_now']:+.2f} €",
-                    "Vs achat": f"{scenario['profit_vs_cost']:+.2f} €",
-                } for scenario in metrics["scenarios"]],
-                hide_index=True, use_container_width=True,
-            )
+            st.caption("Scénarios sur les prix de marché disponibles (simulation, pas une prévision)")
+            if metrics["coverage_pct"]:
+                st.dataframe(
+                    [{
+                        "Baisse": f"-{scenario['drop_pct']}%",
+                        "Valeur nette": f"{scenario['value_after_fees']:.2f} €",
+                        "Écart actuel": f"{scenario['change_vs_now']:+.2f} €",
+                    } for scenario in metrics["scenarios"]],
+                    hide_index=True, use_container_width=True,
+                )
+            else:
+                st.info("Aucun relevé Scryfall disponible pour calculer ces scénarios.")
         st.divider()
 
     indexed_cards = []
@@ -358,13 +353,9 @@ with tab_stock:
                 )
                 record_index, edit_card = indexed_cards[edit_position]
                 with st.form(f"quick_edit_form_{record_index}"):
-                    edit_quantity, edit_purchase, edit_selling, edit_target = st.columns(4)
+                    edit_quantity, edit_selling, edit_target = st.columns(3)
                     quantity_value = edit_quantity.number_input(
                         "Quantité", min_value=1, value=max(1, int(edit_card.get("quantity", 1))), step=1
-                    )
-                    purchase_value = edit_purchase.number_input(
-                        "Prix d’achat unitaire (€)", min_value=0.0,
-                        value=float(edit_card.get("purchase_price", 0)), step=0.5
                     )
                     selling_value = edit_selling.number_input(
                         "Prix de vente unitaire (€)", min_value=0.0,
@@ -378,7 +369,8 @@ with tab_stock:
 
                 if save_quick_edit:
                     if data_manager.update_card(
-                        edit_card, quantity_value, purchase_value, selling_value, target_value
+                        edit_card, quantity_value, edit_card.get("purchase_price", 0),
+                        selling_value, target_value
                     ):
                         st.toast("Modifications enregistrées", icon="✅")
                     else:
@@ -420,16 +412,8 @@ with tab_stock:
                             unsafe_allow_html=True
                         )
 
-                        p_price = card.get("purchase_price", 0.0)
                         s_price = card.get("selling_price", 0.0)
-                        margin_info = data_manager.calculate_net_margin(s_price, p_price)
-
-                        c_p1, c_p2 = st.columns(2)
-                        c_p1.markdown(f"Achat: **{p_price:.2f} €**")
-                        c_p2.markdown(f"Vente: **{s_price:.2f} €**")
-
-                        margin_value = margin_info["net_profit"] * quantity
-                        st.markdown(render_margin_badge(margin_value, margin_info["roi_percent"]), unsafe_allow_html=True)
+                        st.markdown(f"Prix de vente : **{s_price:.2f} €**")
                         st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
                             popularity_by_card.get(str(card.get("scryfall_id")))
                         ))
@@ -450,7 +434,7 @@ with tab_stock:
                 stock_advisor.popularity_badge(popularity_by_card.get(str(card.get("scryfall_id"))))
                 for card in filtered_cards
             ]
-            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "purchase_price", "selling_price", "liquidity_rating", "popularity"]
+            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "selling_price", "liquidity_rating", "popularity"]
             if target_status == "SOLD":
                 display_cols.extend(["actual_sale_price", "date_sold"])
 
@@ -477,7 +461,7 @@ with tab_stock:
             )
 
             st.subheader("Détail & Actions sur une carte")
-            card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['purchase_price']}€" for c in filtered_cards]
+            card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['selling_price']}€" for c in filtered_cards]
             selected_idx = st.selectbox("Sélectionner une carte :", range(len(card_names)), format_func=lambda x: card_names[x])
 
             if selected_idx is not None:
@@ -518,11 +502,7 @@ with tab_stock:
 
                     st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
                     st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
-                    st.write(f"Prix d'Achat : {card['purchase_price']:.2f} €")
                     st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
-
-                    margin_info = data_manager.calculate_net_margin(card['selling_price'], card['purchase_price'])
-                    st.write(f"**Bénéfice Net Estimé :** {margin_info['net_profit']:.2f} € (ROI : {margin_info['roi_percent']} %)")
 
                     if legalities:
                         st.markdown("#### **Légalités en Format**")
@@ -729,7 +709,7 @@ with tab_search:
                 st.warning(
                     f"{len(prepared['cards'])} ligne(s) préparée(s). "
                     "Les cartes absentes du fichier seront retirées du stock en vente, sans créer de vente. "
-                    "Les nouveaux prix d'achat sont inconnus et doivent être renseignés dans l'application."
+                    "Les prix de vente et les quantités du fichier seront utilisés pour la valeur du stock."
                 )
                 confirmed = st.checkbox(
                     "Je confirme que ce fichier contient tout mon stock Cardmarket actuel.",

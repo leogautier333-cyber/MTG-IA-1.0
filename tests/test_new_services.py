@@ -30,6 +30,19 @@ class PricingTests(unittest.TestCase):
 
 
 class PortfolioTests(unittest.TestCase):
+    def test_asking_value_uses_only_active_stock_and_quantities_without_market_prices(self):
+        collection = [
+            {"scryfall_id": "a", "quantity": 3, "selling_price": 1.25, "status": "FOR_SALE"},
+            {"scryfall_id": "", "quantity": 2, "selling_price": 4.0, "status": "FOR_SALE"},
+            {"scryfall_id": "c", "quantity": 9, "selling_price": 100.0, "status": "SOLD"},
+            {"scryfall_id": "d", "quantity": 2, "selling_price": 50.0, "status": "WITHDRAWN"},
+        ]
+        metrics = portfolio_metrics.summarize(collection, {})
+        self.assertEqual(metrics["cards"], 2)
+        self.assertEqual(metrics["copies"], 5)
+        self.assertEqual(metrics["asking_value"], 11.75)
+        self.assertEqual(metrics["coverage_pct"], 0)
+
     def test_sold_cards_leave_the_value(self):
         history = {"a": {"2026-01-01": {"eur": 10}, "2026-01-05": {"eur": 12}}}
         cards = [{"scryfall_id": "a", "quantity": 2, "purchase_price": 5, "date_added": "2026-01-01T10:00",

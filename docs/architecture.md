@@ -54,7 +54,7 @@ Les commandes slash Discord et l'assistant IA (`agents/`, `ai_engine.py`) ne son
 
 `services/portfolio_metrics.py` calcule couverture, exposition et scénarios; `services/alert_triage.py` classe les alertes; `services/inventory.py` et `database/storage.py` conservent le journal dans la fiche de stock; `services/sales_report.py` compare les ventes à la référence historique.
 
-L'onglet « Stock & Ventes » affiche le coût d'achat du stock en vente, la valeur cotée après une provision de 5 % de frais, la plus-value latente nette, la couverture et l'ancienneté des relevés. Les cartes sans prix sont comptées dans le coût investi, mais pas dans la valeur cotée; l'interface le signale. Les expositions par carte et édition et les baisses de 10/20/30 % sont des vues descriptives, pas des prévisions.
+L'onglet « Stock & Ventes » affiche le nombre d'exemplaires et la valeur aux prix de vente enregistrés, calculée comme la somme des prix unitaires multipliés par les quantités. Il affiche séparément la valeur aux derniers prix Scryfall et leur couverture : les cartes sans relevé ne sont pas incluses dans cette valeur, qui n'est pas un prix de vente garanti. Les expositions par carte et édition et les baisses de 10/20/30 % sont des vues descriptives basées sur les relevés de marché, pas des prévisions. Les données d'achat restent conservées en base mais ne sont pas utilisées dans cette vue.
 
 Les alertes de l'onglet « Prix & Alertes » sont triées par impact estimé sur la quantité détenue, part de portefeuille et fraîcheur. Les alertes communautaires restent qualifiées de rumeurs/événements à confirmer; les prix Scryfall sont des références indicatives.
 

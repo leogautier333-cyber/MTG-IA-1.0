@@ -20,12 +20,15 @@ def summarize(collection, price_history, today=None):
         card for card in collection
         if card.get("status", "FOR_SALE") == "FOR_SALE"
     ]
-    invested = priced_cost = gross_value = 0.0
+    invested = priced_cost = gross_value = asking_value = 0.0
+    copies = 0
     missing_prices = stale_prices = priced_cards = 0
     positions_by_key = {}
 
     for card in cards:
         quantity = max(1, int(card.get("quantity") or 1))
+        copies += quantity
+        asking_value += float(card.get("selling_price") or 0) * quantity
         unit_cost = float(card.get("purchase_price") or 0)
         cost = unit_cost * quantity
         invested += cost
@@ -76,6 +79,8 @@ def summarize(collection, price_history, today=None):
 
     return {
         "cards": len(cards),
+        "copies": copies,
+        "asking_value": round(asking_value, 2),
         "invested": round(invested, 2),
         "priced_cost": round(priced_cost, 2),
         "gross_value": round(gross_value, 2),

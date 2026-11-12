@@ -9,7 +9,13 @@ def _was_held(card, day):
     added = _day(card.get("date_added"))
     if added and added > day:
         return False
-    return not (card.get("status") == "SOLD" and _day(card.get("date_sold")) and _day(card.get("date_sold")) <= day)
+    if card.get("status") == "SOLD":
+        end = _day(card.get("date_sold"))
+    elif card.get("status") == "WITHDRAWN":
+        end = _day(card.get("date_withdrawn"))
+    else:
+        end = ""
+    return not (end and end <= day)
 
 
 def value_series(collection, price_history):

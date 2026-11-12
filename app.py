@@ -11,7 +11,7 @@ import streamlit as st
 import scryfall
 import data_manager
 from services import (
-    alert_triage, csv_import, github_actions, portfolio_history, portfolio_metrics,
+    alert_triage, cardmarket_import, csv_import, github_actions, portfolio_history, portfolio_metrics,
     pricing, sales_report, stock_advisor,
 )
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
@@ -224,6 +224,15 @@ with tab_stock:
     metrics = portfolio_metrics.summarize(collection, price_history)
     if metrics["cards"]:
         st.subheader("Vue portefeuille · cartes en vente")
+        unknown_costs = sum(
+            1 for card in collection
+            if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("purchase_price_unknown")
+        )
+        if unknown_costs:
+            st.warning(
+                f"Prix d'achat inconnu pour {unknown_costs} ligne(s) importée(s) : "
+                "les coûts et bénéfices affichés sont incomplets. Renseigne-les dans l'édition rapide."
+            )
         metric_cols = st.columns(4)
         metric_cols[0].metric("Coût d'achat", f"{metrics['invested']:.2f} €")
         metric_cols[1].metric(
@@ -581,7 +590,10 @@ with tab_stock:
         with st.popover("Export / Import", use_container_width=False):
             export_json, export_csv = st.columns(2)
             collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
-            collection_csv = pd.DataFrame(collection).to_csv(index=False).encode("utf-8-sig")
+            active_collection = [
+                card for card in collection if card.get("status", "FOR_SALE") == "FOR_SALE"
+            ]
+            collection_csv = pd.DataFrame(active_collection).to_csv(index=False).encode("utf-8-sig")
 
             with export_json:
                 st.download_button(
@@ -593,11 +605,12 @@ with tab_stock:
                 )
             with export_csv:
                 st.download_button(
-                    "CSV",
+                    "CSV du stock en vente",
                     data=collection_csv,
-                    file_name="collection.csv",
+                    file_name="stock.csv",
                     mime="text/csv",
-                    disabled=not collection,
+                    disabled=not active_collection,
+                    help="Export de l'application, distinct de l'export Cardmarket nécessaire à la synchronisation.",
                     use_container_width=True
                 )
 
@@ -647,12 +660,94 @@ with tab_stock:
 with tab_search:
     st.header("Rechercher et Ajouter une carte")
 
-    with st.expander("Importer un fichier CSV (Cardmarket, tableur…)"):
+    with st.expander("Synchroniser mon stock Cardmarket (CSV complet)"):
+        st.caption(
+            "Exporte ton stock depuis Cardmarket puis dépose le fichier ici. Après contrôle et confirmation, "
+            "le fichier remplace les cartes en vente ; les ventes et l'historique restent conservés. "
+            "Les cartes retirées ne sont pas déclarées vendues."
+        )
+        cardmarket_file = st.file_uploader(
+            "Export complet Cardmarket", type=["csv"], key="cardmarket_sync_file"
+        )
+        if cardmarket_file is not None:
+            file_bytes = cardmarket_file.getvalue()
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
+            prepared = st.session_state.get("cardmarket_sync_prepared")
+            if prepared and prepared["hash"] != file_hash:
+                st.session_state.pop("cardmarket_sync_prepared", None)
+                prepared = None
+            if st.button("Vérifier et préparer le stock Cardmarket", key="prepare_cardmarket_sync"):
+                st.session_state.pop("cardmarket_sync_prepared", None)
+                prepared = None
+                try:
+                    rows = cardmarket_import.parse(file_bytes.decode("utf-8-sig"))
+                    with st.spinner(f"Identification de {len(rows)} ligne(s) via Scryfall…"):
+                        resolved, errors = cardmarket_import.resolve(rows)
+                    if errors:
+                        for error in errors:
+                            st.error(error)
+                        st.error("Import partiel refusé : le stock n'a pas été modifié.")
+                    else:
+                        prepared = {
+                            "hash": file_hash, "cards": resolved,
+                            "collection": data_manager.get_collection(),
+                        }
+                        st.session_state["cardmarket_sync_prepared"] = prepared
+                except (UnicodeDecodeError, ValueError, RuntimeError) as error:
+                    st.error(f"Préparation impossible : {error}")
+            if prepared:
+                st.dataframe(
+                    [{
+                        "Carte": card["name"], "Édition": card["set_code"].upper(),
+                        "Qté": card["quantity"], "Langue": card["language"],
+                        "État": card["condition"], "Foil": card["foil"],
+                        "Prix de vente (€)": card["selling_price"],
+                    } for card in prepared["cards"]],
+                    hide_index=True, use_container_width=True,
+                )
+                st.warning(
+                    f"{len(prepared['cards'])} ligne(s) préparée(s). "
+                    "Les cartes absentes du fichier seront retirées du stock en vente, sans créer de vente. "
+                    "Les nouveaux prix d'achat sont inconnus et doivent être renseignés dans l'application."
+                )
+                confirmed = st.checkbox(
+                    "Je confirme que ce fichier contient tout mon stock Cardmarket actuel.",
+                    key=f"confirm_cardmarket_{file_hash}",
+                )
+                if st.button("Remplacer le stock en vente", disabled=not confirmed, type="primary"):
+                    try:
+                        result = data_manager.synchronize_cardmarket_stock(
+                            prepared["cards"], prepared["collection"]
+                        )
+                    except ValueError as error:
+                        st.error(str(error))
+                    else:
+                        st.session_state.pop("cardmarket_sync_prepared", None)
+                        st.session_state["cardmarket_sync_result"] = result
+                        st.rerun()
+        sync_result = st.session_state.pop("cardmarket_sync_result", None)
+        if sync_result:
+            st.success(
+                f"Stock synchronisé : {sync_result['matched']} mise(s) à jour, "
+                f"{sync_result['added']} nouvelle(s) ligne(s), "
+                f"{sync_result['withdrawn']} retirée(s) du stock."
+            )
+
+    with st.expander("Importer un CSV générique (tableur…)"):
         st.caption("Colonnes reconnues : nom, édition, numéro, quantité, prix d'achat, prix de vente, état, langue, foil. Les cartes sont ajoutées au stock sans rien remplacer.")
         csv_file = st.file_uploader("Fichier CSV", type=["csv"], key="csv_import_file")
         if csv_file is not None:
             try:
-                csv_rows, csv_errors = csv_import.parse_csv(csv_file.getvalue().decode("utf-8-sig"))
+                csv_text = csv_file.getvalue().decode("utf-8-sig")
+                if cardmarket_import.is_cardmarket_export(csv_text):
+                    csv_rows = []
+                    csv_errors = [
+                        "Cet export Cardmarket doit être utilisé dans « Synchroniser mon stock Cardmarket "
+                        "(CSV complet) » ci-dessus. L'identification se fait par identifiant produit, "
+                        "sans traduction des noms."
+                    ]
+                else:
+                    csv_rows, csv_errors = csv_import.parse_csv(csv_text)
             except UnicodeDecodeError:
                 csv_rows, csv_errors = [], ["Fichier illisible : enregistre-le en UTF-8."]
             if csv_rows:

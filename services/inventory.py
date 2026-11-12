@@ -70,6 +70,12 @@ def add_cards_to_collection(cards_kwargs):
     return len(cards)
 
 
+def synchronize_cardmarket_stock(cards, expected_collection):
+    if not cards:
+        raise ValueError("Un stock vide ne peut pas être synchronisé.")
+    return storage.synchronize_cardmarket_stock(cards, expected_collection, _now())
+
+
 def mark_card_as_sold(scryfall_id, actual_sale_price):
     return storage.mark_inventory_sold(scryfall_id, float(actual_sale_price), _now())
 

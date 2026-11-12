@@ -486,6 +486,90 @@ def append_inventory_cards(cards):
         connection.executemany(_INSERT_INVENTORY, [_inventory_row(card) for card in cards])
 
 
+def synchronize_cardmarket_stock(cards, expected_collection, synced_at):
+    """Synchronise les lignes en vente en une transaction, sans toucher aux ventes."""
+    def variant(card):
+        return (
+            str(card.get("scryfall_id", "")), bool(card.get("foil")),
+            str(card.get("language", "FR")).upper(), str(card.get("condition", "NM")).upper(),
+        )
+
+    def counts(items, key_function):
+        result = {}
+        for item in items:
+            key = key_function(item)
+            result[key] = result.get(key, 0) + 1
+        return result
+
+    with _database() as connection:
+        if connection.dialect == "postgres":
+            connection.execute("LOCK TABLE inventory IN EXCLUSIVE MODE")
+        else:
+            connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            "SELECT entry_id, payload FROM inventory ORDER BY entry_id"
+        ).fetchall()
+        existing = [(row["entry_id"], json.loads(row["payload"])) for row in rows]
+        if [card for _, card in existing] != expected_collection:
+            raise ValueError("Le stock a changé depuis l'aperçu ; recommence la préparation.")
+        active = [(entry_id, card) for entry_id, card in existing
+                  if card.get("status", "FOR_SALE") == "FOR_SALE"]
+        article_counts = counts(
+            [card for _, card in active if card.get("cardmarket_article_id")],
+            lambda card: str(card["cardmarket_article_id"]),
+        )
+        incoming_articles = counts(cards, lambda card: str(card["cardmarket_article_id"]))
+        if any(count != 1 for count in article_counts.values()) or any(
+            count != 1 for count in incoming_articles.values()
+        ):
+            raise ValueError("Identifiants Cardmarket en double ; synchronisation refusée.")
+        old_variants = counts([card for _, card in active], variant)
+        new_variants = counts(cards, variant)
+        used = set()
+        matched = added = 0
+        for incoming in cards:
+            article = str(incoming["cardmarket_article_id"])
+            matches = [(entry_id, card) for entry_id, card in active
+                       if str(card.get("cardmarket_article_id", "")) == article]
+            if not matches and old_variants.get(variant(incoming)) == 1 and new_variants[variant(incoming)] == 1:
+                matches = [(entry_id, card) for entry_id, card in active
+                           if not card.get("cardmarket_article_id") and variant(card) == variant(incoming)]
+            if matches and matches[0][0] not in used:
+                entry_id, current = matches[0]
+                if (current.get("cardmarket_product_id")
+                        and str(current["cardmarket_product_id"]) != str(incoming["cardmarket_product_id"])):
+                    raise ValueError(f"Produit modifié pour l'article {article} ; synchronisation refusée.")
+                updated = {**current, **incoming, "status": "FOR_SALE"}
+                used.add(entry_id)
+                matched += 1
+                connection.execute(
+                    """UPDATE inventory SET scryfall_id = ?, foil = ?, language = ?, condition = ?,
+                       set_code = ?, collector_number = ?, status = ?, date_added = ?, date_sold = ?,
+                       purchase_price = ?, selling_price = ?, quantity = ?, payload = ?
+                       WHERE entry_id = ?""",
+                    (*_inventory_row(updated), entry_id),
+                )
+            else:
+                new_card = {
+                    **incoming, "status": "FOR_SALE", "date_added": synced_at,
+                    "purchase_price": 0.0, "purchase_price_unknown": True,
+                    "liquidity_rating": "MEDIUM",
+                }
+                connection.execute(_INSERT_INVENTORY, _inventory_row(new_card))
+                added += 1
+        withdrawn = 0
+        for entry_id, current in active:
+            if entry_id in used:
+                continue
+            current.update(status="WITHDRAWN", date_withdrawn=synced_at)
+            connection.execute(
+                "UPDATE inventory SET status = ?, payload = ? WHERE entry_id = ?",
+                ("WITHDRAWN", _serialize(current), entry_id),
+            )
+            withdrawn += 1
+    return {"matched": matched, "added": added, "withdrawn": withdrawn}
+
+
 _EDITABLE_FIELDS = ("quantity", "purchase_price", "selling_price", "target_price")
 
 
@@ -508,6 +592,8 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
                 quantity=int(quantity), purchase_price=float(purchase_price),
                 selling_price=float(selling_price),
             )
+            if float(purchase_price) > 0:
+                card.pop("purchase_price_unknown", None)
             if target_price:
                 card["target_price"] = float(target_price)
             else:

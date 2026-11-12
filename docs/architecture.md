@@ -59,3 +59,7 @@ L'onglet « Stock & Ventes » affiche le coût d'achat du stock en vente, la val
 Les alertes de l'onglet « Prix & Alertes » sont triées par impact estimé sur la quantité détenue, part de portefeuille et fraîcheur. Les alertes communautaires restent qualifiées de rumeurs/événements à confirmer; les prix Scryfall sont des références indicatives.
 
 Chaque fiche de stock peut conserver un journal daté (décision, justification, horizon) dans son payload PostgreSQL/SQLite existant, sans migration de schéma. Le bilan des ventes compare le prix réalisé au dernier relevé connu au plus tard à la date de vente; l'écart est indicatif, ne représente pas nécessairement un prix exécutable.
+
+## Synchronisation Cardmarket
+
+`services/cardmarket_import.py` contrôle l'export complet (identifiants ArticleID et idProduct, quantité, prix, langue et finition), puis résout chaque produit avec l'API Scryfall. L'interface refuse toute synchronisation partielle et exige une confirmation. `database/storage.py` compare l'aperçu à l'état courant et applique les changements en une transaction : conservation des fiches correspondantes, archivage `WITHDRAWN` des lignes absentes et maintien des ventes. Les prix d'achat inconnus des nouvelles fiches sont signalés, pas déduits du prix de vente. L'historique de portefeuille reste approximatif : les anciennes quantités et dates de retrait ne sont pas fournies par les exports Cardmarket.

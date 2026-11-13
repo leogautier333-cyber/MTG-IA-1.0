@@ -380,6 +380,7 @@ def scan_stock_events(session=requests):
 
 
 def analyze_stock_prices(session=requests, events=()):
+    started = time.perf_counter()
     collection = inventory.get_collection()
     untracked = [
         card.get("name", "Carte inconnue") for card in collection
@@ -408,65 +409,78 @@ def analyze_stock_prices(session=requests, events=()):
         for card in scryfall.get_cards_batch(card_ids)
         if card.get("id")
     }
+    fetched_at = time.perf_counter()
     observed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-    known_alert_ids = {alert.get("id") for alert in inventory.get_price_alerts()}
     new_alerts = []
-    snapshots_written = 0
     missing_prices = []
     first_observations = []
-
+    valid_positions = []
+    ranks = {}
     for position in positions.values():
         card_data = cards_by_id.get(position["scryfall_id"])
         if not card_data:
             missing_prices.append(f"{position['name']} ({position['set_code']})")
             continue
-        market_data.record_demand_snapshot(position["scryfall_id"], card_data.get("edhrec_rank"))
+        ranks[position["scryfall_id"]] = card_data.get("edhrec_rank")
         price_key = "eur_foil" if position["foil"] else "eur"
         raw_price = (card_data.get("prices") or {}).get(price_key)
         if raw_price in (None, ""):
             missing_prices.append(f"{position['name']} ({position['set_code']})")
             continue
-        current_price = float(raw_price)
-        history = inventory.get_variant_price_history(
-            position["scryfall_id"], foil=position["foil"]
-        )
-        previous = history[-1] if history else None
-        inventory.record_price_snapshot(
-            position["scryfall_id"], current_price, foil=position["foil"],
-            observed_at=observed_at,
-        )
-        snapshots_written += 1
+        valid_positions.append((position, float(raw_price)))
 
-        if position.get("target_price") and current_price >= position["target_price"]:
-            target_alert = _create_target_alert(position, current_price, observed_at)
-            if target_alert["id"] not in known_alert_ids:
-                new_alerts.append(target_alert)
-                known_alert_ids.add(target_alert["id"])
+    with storage._database() as connection:
+        known_alert_ids = {
+            row["alert_id"] for row in connection.execute("SELECT alert_id FROM price_alerts").fetchall()
+        }
+        previous_prices = storage._get_latest_stock_snapshots(connection, card_ids)
+        market_data._record_demand_snapshots(connection, ranks, observed_at[:10])
+        demand_histories = market_data._get_edhrec_histories(connection, card_ids)
+        for position, current_price in valid_positions:
+            previous = previous_prices.get((position["scryfall_id"], position["foil"]))
+            if position.get("target_price") and current_price >= position["target_price"]:
+                target_alert = _create_target_alert(position, current_price, observed_at)
+                if target_alert["id"] not in known_alert_ids:
+                    new_alerts.append(target_alert)
+                    known_alert_ids.add(target_alert["id"])
 
-        if not previous or previous["price_eur"] <= 0:
-            first_observations.append(f"{position['name']} ({position['set_code']})")
-            continue
-        change_pct = (current_price - previous["price_eur"]) / previous["price_eur"] * 100
-        popularity_delta = stock_advisor.popularity_delta_pct(position["scryfall_id"])
-        if _price_trend(previous["price_eur"], current_price) == "STABLE":
-            advice = {
-                "context": "Variation entre -10 % et +10 % depuis le relevé précédent.",
-                "verdict": "Prix relativement stable : continuer la surveillance.",
-            }
-        else:
-            advice = stock_advisor.advise(
-                change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ())
+            if not previous or previous["price_eur"] <= 0:
+                first_observations.append(f"{position['name']} ({position['set_code']})")
+                continue
+            change_pct = (current_price - previous["price_eur"]) / previous["price_eur"] * 100
+            popularity_delta = stock_advisor._popularity_delta_from_history(
+                demand_histories[position["scryfall_id"]]
             )
-        alert = _create_price_alert(
-            position, previous, current_price, observed_at, advice, popularity_delta
-        )
-        if alert["id"] not in known_alert_ids:
-            new_alerts.append(alert)
-            known_alert_ids.add(alert["id"])
+            if _price_trend(previous["price_eur"], current_price) == "STABLE":
+                advice = {
+                    "context": "Variation entre -10 % et +10 % depuis le relevé précédent.",
+                    "verdict": "Prix relativement stable : continuer la surveillance.",
+                }
+            else:
+                advice = stock_advisor.advise(
+                    change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ())
+                )
+            alert = _create_price_alert(
+                position, previous, current_price, observed_at, advice, popularity_delta
+            )
+            if alert["id"] not in known_alert_ids:
+                new_alerts.append(alert)
+                known_alert_ids.add(alert["id"])
 
-    if new_alerts:
-        inventory.save_price_alerts(new_alerts)
+        storage._record_stock_snapshots(
+            connection,
+            [(position["scryfall_id"], position["foil"], price)
+             for position, price in valid_positions],
+            observed_at,
+        )
+        storage._upsert_price_alerts(connection, new_alerts)
+
+    persisted_at = time.perf_counter()
     notifications_sent = _deliver_pending_alerts(set(positions), session=session)
+    LOGGER.info(
+        "Analyse des prix : %d position(s), préparation/Scryfall %.2fs, SQL/calcul %.2fs, Discord %.2fs.",
+        len(positions), fetched_at - started, persisted_at - fetched_at, time.perf_counter() - persisted_at,
+    )
     if untracked or missing_prices or first_observations:
         LOGGER.warning(
             "Couverture des prix incomplète : %d ligne(s) sans identifiant Scryfall, "
@@ -475,7 +489,7 @@ def analyze_stock_prices(session=requests, events=()):
         )
     return {
         "analyzed": len(positions),
-        "snapshots_written": snapshots_written,
+        "snapshots_written": len(valid_positions),
         "alerts_created": len(new_alerts),
         "notifications_sent": notifications_sent,
         "untracked": untracked,
@@ -486,11 +500,13 @@ def analyze_stock_prices(session=requests, events=()):
 
 def run_analysis(session=requests):
     """Analyse complète : veille d'événements du stock puis variations de prix."""
+    started = time.perf_counter()
     try:
         events = scan_stock_events(session=session)
     except Exception:
         LOGGER.exception("Échec de la veille spoilers/Reddit ; analyse des prix poursuivie.")
         events = []
+    LOGGER.info("Veille événements : %.2fs.", time.perf_counter() - started)
     result = analyze_stock_prices(session=session, events=events)
     result["events_detected"] = len(events)
     return result
@@ -509,6 +525,7 @@ def run_forever():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Veille des prix du stock Magic Trading.")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--once", action="store_true", help="Analyser le stock une fois.")

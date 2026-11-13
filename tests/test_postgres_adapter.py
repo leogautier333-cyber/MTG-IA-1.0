@@ -4,7 +4,7 @@ import os
 from contextlib import redirect_stderr
 from unittest.mock import patch
 
-from database import storage
+from database import market_data, storage
 from database.healthcheck import main as database_healthcheck
 
 
@@ -93,6 +93,21 @@ class PostgresAdapterTests(unittest.TestCase):
         self.assertEqual(fake_connection.statements[1][0], "INSERT INTO metadata(key) VALUES (%s)")
         self.assertIn("CREATE TABLE first_table", fake_connection.statements[2][0])
         self.assertIn("CREATE INDEX first_index", fake_connection.statements[3][0])
+
+    def test_analysis_batch_writes_use_postgres_placeholders(self):
+        fake_connection = FakeConnection()
+        connection = storage._DatabaseConnection(fake_connection, "postgres")
+        market_data._record_demand_snapshots(connection, {"card": 123}, "2026-11-13")
+        storage._record_stock_snapshots(connection, [("card", False, 2.5)],
+                                        "2026-11-13T10:00:00+00:00")
+        storage._upsert_price_alerts(connection, [{
+            "id": "test", "status": "pending", "created_at": "2026-11-13",
+        }])
+        self.assertEqual(len(fake_connection.statements), 3)
+        for query, values in fake_connection.statements:
+            self.assertNotIn("?", query)
+            self.assertIn("%s", query)
+            self.assertEqual(len(values), 1)
 
 
 if __name__ == "__main__":

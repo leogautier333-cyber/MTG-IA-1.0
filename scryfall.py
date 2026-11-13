@@ -96,7 +96,7 @@ def get_cards_batch(scryfall_ids: List[str]) -> List[Dict[str, Any]]:
         _rate_limit()
         url = f"{BASE_URL}/cards/collection"
         response = requests.post(
-            url, json={"identifiers": identifiers}, headers=HEADERS
+            url, json={"identifiers": identifiers}, headers=HEADERS, timeout=20
         )
 
         if response.status_code == 200:

@@ -684,23 +684,31 @@ def get_price_alerts():
     return [json.loads(row["payload"]) for row in rows]
 
 
-def _upsert_price_alert(connection, alert):
-    connection.execute(
-        """INSERT INTO price_alerts(alert_id, status, created_at, payload)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(alert_id) DO UPDATE SET status = excluded.status, payload = excluded.payload""",
-        (
-            str(alert["id"]), str(alert.get("status", "pending")),
-            str(alert.get("created_at", "")), _serialize(alert),
-        ),
+_UPSERT_PRICE_ALERT = """INSERT INTO price_alerts(alert_id, status, created_at, payload)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(alert_id) DO UPDATE SET status = excluded.status, payload = excluded.payload"""
+
+
+def _price_alert_values(alert):
+    return (
+        str(alert["id"]), str(alert.get("status", "pending")),
+        str(alert.get("created_at", "")), _serialize(alert),
     )
+
+
+def _upsert_price_alert(connection, alert):
+    connection.execute(_UPSERT_PRICE_ALERT, _price_alert_values(alert))
+
+
+def _upsert_price_alerts(connection, alerts):
+    if alerts:
+        connection.executemany(_UPSERT_PRICE_ALERT, [_price_alert_values(alert) for alert in alerts])
 
 
 def save_price_alerts(alerts):
     """Insère ou met à jour les alertes de variation de prix (clé : alert['id'])."""
     with _database() as connection:
-        for alert in alerts:
-            _upsert_price_alert(connection, alert)
+        _upsert_price_alerts(connection, alerts)
 
 
 def get_watchlist():
@@ -767,6 +775,43 @@ def get_variant_price_history(scryfall_id, foil=False, language="FR", condition=
         {"observed_at": row["observed_at"], "snapshot_date": row["snapshot_date"], "price_eur": row["price_eur"]}
         for row in rows
     ]
+
+
+def _get_latest_stock_snapshots(connection, card_ids):
+    result = {}
+    for start in range(0, len(card_ids), 500):
+        chunk = card_ids[start:start + 500]
+        placeholders = ", ".join("?" for _ in chunk)
+        rows = connection.execute(
+            f"""SELECT scryfall_id, foil, observed_at, price_eur FROM (
+                    SELECT scryfall_id, foil, observed_at, price_eur,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY scryfall_id, foil ORDER BY snapshot_date DESC
+                           ) AS position
+                    FROM price_snapshots
+                    WHERE language = 'FR' AND condition = 'NM'
+                      AND scryfall_id IN ({placeholders})
+                ) AS latest WHERE position = 1""",
+            chunk,
+        ).fetchall()
+        for row in rows:
+            result[(row["scryfall_id"], bool(row["foil"]))] = {
+                "observed_at": row["observed_at"], "price_eur": row["price_eur"],
+            }
+    return result
+
+
+def _record_stock_snapshots(connection, records, observed_at):
+    if records:
+        connection.executemany(
+            """INSERT INTO price_snapshots(
+                   scryfall_id, foil, language, condition, snapshot_date, observed_at, price_eur
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(scryfall_id, foil, language, condition, snapshot_date)
+               DO UPDATE SET observed_at = excluded.observed_at, price_eur = excluded.price_eur""",
+            [(str(card_id), int(bool(foil)), "FR", "NM", observed_at[:10], observed_at, price)
+             for card_id, foil, price in records],
+        )
 
 
 def record_scryfall_prices(card, variants):

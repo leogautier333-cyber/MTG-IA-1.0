@@ -162,36 +162,56 @@ def get_edhrec_history(scryfall_id):
 
 def get_edhrec_histories(scryfall_ids):
     ids = list(dict.fromkeys(str(card_id) for card_id in scryfall_ids))
-    histories = {card_id: [] for card_id in ids}
     if not ids:
-        return histories
+        return {}
     with _database() as connection:
-        for start in range(0, len(ids), 500):
-            chunk = ids[start:start + 500]
-            placeholders = ", ".join("?" for _ in chunk)
+        return _get_edhrec_histories(connection, ids)
+
+
+def _get_edhrec_histories(connection, ids):
+    histories = {card_id: [] for card_id in ids}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        placeholders = ", ".join("?" for _ in chunk)
+        rows = connection.execute(
+            f"""SELECT scryfall_id, snapshot_date, edhrec_rank
+                FROM card_demand_snapshots WHERE scryfall_id IN ({placeholders})
+                ORDER BY snapshot_date""",
+            chunk,
+        ).fetchall()
+        for row in rows:
+            histories[row["scryfall_id"]].append({
+                "snapshot_date": row["snapshot_date"], "edhrec_rank": row["edhrec_rank"],
+            })
+        missing = [card_id for card_id in chunk if not histories[card_id]]
+        if missing:
+            placeholders = ", ".join("?" for _ in missing)
             rows = connection.execute(
-                f"""SELECT scryfall_id, snapshot_date, edhrec_rank
-                    FROM card_demand_snapshots WHERE scryfall_id IN ({placeholders})
-                    ORDER BY snapshot_date""",
-                chunk,
+                f"SELECT scryfall_id, edhrec_rank FROM bulk_prints WHERE scryfall_id IN ({placeholders})",
+                missing,
             ).fetchall()
             for row in rows:
-                histories[row["scryfall_id"]].append({
-                    "snapshot_date": row["snapshot_date"], "edhrec_rank": row["edhrec_rank"],
-                })
-            missing = [card_id for card_id in chunk if not histories[card_id]]
-            if missing:
-                placeholders = ", ".join("?" for _ in missing)
-                rows = connection.execute(
-                    f"SELECT scryfall_id, edhrec_rank FROM bulk_prints WHERE scryfall_id IN ({placeholders})",
-                    missing,
-                ).fetchall()
-                for row in rows:
-                    if row["edhrec_rank"] is not None:
-                        histories[row["scryfall_id"]].append({
-                            "snapshot_date": None, "edhrec_rank": row["edhrec_rank"],
-                        })
+                if row["edhrec_rank"] is not None:
+                    histories[row["scryfall_id"]].append({
+                        "snapshot_date": None, "edhrec_rank": row["edhrec_rank"],
+                    })
     return histories
+
+
+def _record_demand_snapshots(connection, records, snapshot_day):
+    values = []
+    for card_id, value in records.items():
+        rank = _as_optional_int(value)
+        if rank is not None and rank > 0:
+            values.append((str(card_id), snapshot_day, rank))
+    if values:
+        connection.executemany(
+            """INSERT INTO card_demand_snapshots(scryfall_id, snapshot_date, edhrec_rank)
+               VALUES (?, ?, ?)
+               ON CONFLICT(scryfall_id, snapshot_date)
+               DO UPDATE SET edhrec_rank = excluded.edhrec_rank""",
+            values,
+        )
 
 
 def get_recent_market_events(scryfall_id, since_date):

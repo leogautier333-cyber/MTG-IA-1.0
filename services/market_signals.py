@@ -85,9 +85,11 @@ def calculate_reprint_risk(scryfall_id, today=None):
 
 
 def analyze_snapshot_buyout(scryfall_id, foil=False, language="FR", condition="NM",
-                            window_days=7, spike_threshold_pct=30.0, today=None):
+                            window_days=7, spike_threshold_pct=30.0, today=None, *,
+                            points=None, demand_history=None):
     """Score unexplained price spikes using daily snapshots, Scryfall events and EDHREC rank."""
-    points = storage.get_price_points(scryfall_id, foil, language, condition)
+    if points is None:
+        points = storage.get_price_points(scryfall_id, foil, language, condition)
     normalized_points = []
     for snapshot_day, price in points:
         try:
@@ -113,7 +115,8 @@ def analyze_snapshot_buyout(scryfall_id, foil=False, language="FR", condition="N
             "reason": f"Dernier snapshot vieux de {snapshot_age_days} jours; actualise les données avant d'évaluer un spike.",
         }
 
-    demand_history = market_data.get_edhrec_history(scryfall_id)
+    if demand_history is None:
+        demand_history = market_data.get_edhrec_history(scryfall_id)
     dated_demand = [
         item for item in demand_history
         if item.get("snapshot_date") and item.get("edhrec_rank") is not None

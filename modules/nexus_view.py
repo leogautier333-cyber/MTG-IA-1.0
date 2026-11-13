@@ -1,8 +1,8 @@
 import streamlit as st
 
 import data_manager
+from database import market_data, storage
 from modules.local_assistant import answer_local_query
-from modules.market_analyzer import portfolio_summary
 from services.market_monitor import refresh_watchlist_prices
 from services.source_health import get_source_statuses
 from services.backtesting import backtest_price_threshold, evaluate_alerts
@@ -34,9 +34,8 @@ def render_nexus_tab():
 
     collection = data_manager.get_collection()
     watchlist = data_manager.get_watchlist()
-    overview = portfolio_summary(collection)
     left, right = st.columns(2)
-    left.metric("Cartes en vente", overview["for_sale_count"])
+    left.metric("Cartes en vente", sum(card.get("status") == "FOR_SALE" for card in collection))
     right.metric("Cartes en watchlist", len(watchlist))
 
     st.subheader("Veille de prix hors-stock")
@@ -102,15 +101,18 @@ def render_nexus_tab():
         if not scryfall_id:
             continue
         variant_key = (
-            scryfall_id, bool(card.get("foil")), card.get("language", "FR"),
-            card.get("condition", "NM"),
+            str(scryfall_id), bool(card.get("foil")), str(card.get("language", "FR")),
+            str(card.get("condition", "NM")),
         )
         tracked_variants.setdefault(variant_key, card)
     buyout_rows = []
-    for card in tracked_variants.values():
+    points_by_variant = storage.get_price_points_batch(tracked_variants)
+    histories = market_data.get_edhrec_histories(key[0] for key in tracked_variants)
+    for key, card in tracked_variants.items():
         result = analyze_snapshot_buyout(
             card["scryfall_id"], foil=card.get("foil", False),
             language=card.get("language", "FR"), condition=card.get("condition", "NM"),
+            points=points_by_variant[key], demand_history=histories[str(key[0])],
         )
         buyout_rows.append({
             "Carte": card.get("name", "Carte"),

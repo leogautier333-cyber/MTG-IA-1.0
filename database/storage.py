@@ -839,6 +839,32 @@ def get_price_points(scryfall_id, foil=False, language="FR", condition="NM"):
     return [(row["snapshot_date"], row["price_eur"]) for row in rows]
 
 
+def get_price_points_batch(variants):
+    keys = list(dict.fromkeys(
+        (str(card_id), bool(foil), str(language), str(condition))
+        for card_id, foil, language, condition in variants
+    ))
+    points = {key: [] for key in keys}
+    ids = list(dict.fromkeys(key[0] for key in keys))
+    if not ids:
+        return points
+    with _database() as connection:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""SELECT scryfall_id, foil, language, condition, snapshot_date, price_eur
+                    FROM price_snapshots WHERE scryfall_id IN ({placeholders})
+                    ORDER BY snapshot_date""",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                key = (row["scryfall_id"], bool(row["foil"]), row["language"], row["condition"])
+                if key in points:
+                    points[key].append((row["snapshot_date"], row["price_eur"]))
+    return points
+
+
 def get_alerts_for_evaluation():
     with _database() as connection:
         rows = connection.execute(

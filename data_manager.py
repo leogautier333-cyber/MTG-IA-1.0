@@ -3,6 +3,7 @@ import functools
 
 import streamlit as st
 
+import scryfall
 from database import storage  # noqa: F401  (utilisé via data_manager.storage par les modules Nexus)
 from services import inventory, stock_advisor
 from services.inventory import (  # noqa: F401  (ré-exports)
@@ -54,7 +55,12 @@ def get_price_alerts():
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_popularity_deltas(scryfall_ids):
-    return {scryfall_id: stock_advisor.popularity_delta_pct(scryfall_id) for scryfall_id in scryfall_ids}
+    return stock_advisor.popularity_deltas_pct(scryfall_ids)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_scryfall_card(name):
+    return scryfall.get_card_by_name(name)
 
 
 save_collection = _invalidating(inventory.save_collection)

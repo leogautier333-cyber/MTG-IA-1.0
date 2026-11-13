@@ -160,6 +160,40 @@ def get_edhrec_history(scryfall_id):
     return [dict(row) for row in rows]
 
 
+def get_edhrec_histories(scryfall_ids):
+    ids = list(dict.fromkeys(str(card_id) for card_id in scryfall_ids))
+    histories = {card_id: [] for card_id in ids}
+    if not ids:
+        return histories
+    with _database() as connection:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""SELECT scryfall_id, snapshot_date, edhrec_rank
+                    FROM card_demand_snapshots WHERE scryfall_id IN ({placeholders})
+                    ORDER BY snapshot_date""",
+                chunk,
+            ).fetchall()
+            for row in rows:
+                histories[row["scryfall_id"]].append({
+                    "snapshot_date": row["snapshot_date"], "edhrec_rank": row["edhrec_rank"],
+                })
+            missing = [card_id for card_id in chunk if not histories[card_id]]
+            if missing:
+                placeholders = ", ".join("?" for _ in missing)
+                rows = connection.execute(
+                    f"SELECT scryfall_id, edhrec_rank FROM bulk_prints WHERE scryfall_id IN ({placeholders})",
+                    missing,
+                ).fetchall()
+                for row in rows:
+                    if row["edhrec_rank"] is not None:
+                        histories[row["scryfall_id"]].append({
+                            "snapshot_date": None, "edhrec_rank": row["edhrec_rank"],
+                        })
+    return histories
+
+
 def get_recent_market_events(scryfall_id, since_date):
     with _database() as connection:
         card = connection.execute(

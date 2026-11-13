@@ -25,6 +25,26 @@ from services import (
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
 
+@st.fragment
+def discord_test_button():
+    if st.button("Envoyer une alerte test Discord"):
+        try:
+            send_test_alert()
+            st.session_state["phase_one_test_sent"] = True
+            st.session_state.pop("phase_one_test_error", None)
+        except Exception as error:
+            st.session_state["phase_one_test_error"] = str(error)
+    if st.session_state.get("phase_one_test_error"):
+        st.error(f"Test Discord impossible : {st.session_state['phase_one_test_error']}")
+    if st.session_state.pop("phase_one_test_sent", False):
+        st.success("Alerte test envoyée à Discord.")
+
+
+@st.cache_data(ttl=60)
+def github_latest_run(workflow_file):
+    return github_actions.latest_run(workflow_file)
+
+
 def price_history_frame(history):
     """Relevés de prix avec une colonne Date, tolérante aux anciens formats (2026-09-23_22h)."""
     frame = pd.DataFrame(history)
@@ -398,7 +418,7 @@ with tab_stock:
             for idx, card in enumerate(filtered_cards):
                 scryfall_data = None
                 if card.get("name") and not card.get("scryfall_resolution_pending") and (not card.get("image_url") or not card.get("mana_cost")):
-                    scryfall_data = scryfall.get_card_by_name(card["name"])
+                    scryfall_data = data_manager.get_scryfall_card(card["name"])
                 img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
                 if not img_url and scryfall_data and "card_faces" in scryfall_data:
                     img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
@@ -481,7 +501,7 @@ with tab_stock:
                     not card.get("image_url") or not card.get("mana_cost")
                     or not card.get("type_line") or not card.get("oracle_text")
                 ):
-                    scryfall_data = scryfall.get_card_by_name(card["name"])
+                    scryfall_data = data_manager.get_scryfall_card(card["name"])
 
                 with col_img:
                     img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
@@ -876,20 +896,11 @@ with tab_prices:
             st.session_state.pop("phase_one_analysis_error", None)
         except Exception as error:
             st.session_state["phase_one_analysis_error"] = str(error)
-    if test_col.button("Envoyer une alerte test Discord"):
-        try:
-            send_test_alert()
-            st.session_state["phase_one_test_sent"] = True
-            st.session_state.pop("phase_one_test_error", None)
-        except Exception as error:
-            st.session_state["phase_one_test_error"] = str(error)
+    with test_col:
+        discord_test_button()
 
     if st.session_state.get("phase_one_analysis_error"):
         st.error(f"Analyse impossible : {st.session_state['phase_one_analysis_error']}")
-    if st.session_state.get("phase_one_test_error"):
-        st.error(f"Test Discord impossible : {st.session_state['phase_one_test_error']}")
-    if st.session_state.pop("phase_one_test_sent", False):
-        st.success("Alerte test envoyée à Discord.")
     analysis = st.session_state.get("phase_one_analysis")
     if analysis:
         st.success(
@@ -1005,12 +1016,13 @@ with tab_prices:
         if button_col.button("Lancer", key=f"gh_run_{workflow_file}", disabled=not github_actions.is_configured()):
             try:
                 github_actions.trigger(workflow_file)
+                github_latest_run.clear()
                 st.session_state[f"gh_msg_{workflow_file}"] = "Lancé sur GitHub (démarre dans quelques secondes)."
             except github_actions.GitHubActionsError as error:
                 st.session_state[f"gh_msg_{workflow_file}"] = f"Erreur : {error}"
         if github_actions.is_configured():
             try:
-                status_col.write(github_actions.run_label(github_actions.latest_run(workflow_file)))
+                status_col.write(github_actions.run_label(github_latest_run(workflow_file)))
             except github_actions.GitHubActionsError as error:
                 status_col.write(f"Statut indisponible : {error}")
         message = st.session_state.get(f"gh_msg_{workflow_file}")

@@ -36,7 +36,7 @@ def get_card_by_name(name: str) -> Optional[Dict[str, Any]]:
     """
     _rate_limit()
     url = f"{BASE_URL}/cards/named"
-    response = requests.get(url, params={"fuzzy": name}, headers=HEADERS)
+    response = requests.get(url, params={"fuzzy": name}, headers=HEADERS, timeout=10)
 
     if response.status_code == 200:
         return response.json()

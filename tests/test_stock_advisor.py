@@ -71,12 +71,14 @@ class AdvisorIntegrationTests(unittest.TestCase):
             phase_one_monitor.analyze_stock_prices()
 
         embed = post.call_args.kwargs["json"]["embeds"][0]
-        fields = {field["name"]: field["value"] for field in embed["fields"]}
-        self.assertEqual(fields["Quantité"], "3")
-        self.assertIn("10.00 € ➡️ 11.50 €", fields["Prix"])
-        self.assertIn("Contexte IA", fields)
-        self.assertIn("Verdict", fields)
-        self.assertEqual(embed["color"], phase_one_monitor.COLOR_UP)
+        self.assertIn("Hausses (1)", embed["description"])
+        self.assertIn("×3", embed["description"])
+        self.assertIn("10.00 € → 11.50 €", embed["description"])
+        self.assertIn("Contexte", embed["description"])
+        self.assertIn("Verdict", embed["description"])
+        alert = inventory.get_price_alerts()[0]
+        self.assertTrue(alert["context"])
+        self.assertTrue(alert["verdict"])
 
     def test_event_scan_is_limited_to_stock_and_deduplicated(self):
         inventory.save_collection([self.card, {**self.card, "scryfall_id": "sold", "status": "SOLD"}])

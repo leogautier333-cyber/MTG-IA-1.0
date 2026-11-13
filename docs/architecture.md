@@ -17,6 +17,8 @@ Chaque analyse enregistre un relevé par jour et par variante (le dernier relev�
 
 Une variation strictement comprise entre -10 % et +10 % déclenche une alerte de stagnation : au maximum une par jour UTC et par impression/finition, pour limiter les répétitions. La comparaison est impossible au premier relevé, si l'ancien prix est nul, si Scryfall ne fournit pas de prix ou si la fiche ne possède pas d'identifiant Scryfall ; ces cas sont signalés dans le résultat de l'analyse. La stagnation décrit uniquement l'écart entre deux relevés, pas une tendance prolongée. Avec de nombreuses cartes, les alertes peuvent être nombreuses et certaines rester en attente si Discord refuse temporairement l'envoi.
 
+Les alertes de stock en attente sont réunies en un seul message Discord par analyse, regroupées par hausse, baisse, stagnation, objectif et veille. Si le texte dépasse la limite d'un embed, le détail complet est joint en fichier texte au même message. Les alertes ne sont marquées envoyées qu'après acceptation par Discord ; les alertes de panne de source restent séparées.
+
 Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
 
 ## Lancer l'application et le suivi
@@ -29,7 +31,7 @@ Lancer une analyse ponctuelle avec `python -m services.phase_one_monitor --once`
 
 Envoyer une alerte de test sans analyser l'inventaire avec `python -m services.phase_one_monitor --test-discord`. Le webhook doit être configuré dans l'environnement du processus.
 
-GitHub Actions : `stock_analysis.yml` lance l'analyse deux fois par jour (07:00 et 19:00 UTC, soit 8h/20h en heure d'hiver ; et à la demande) sur la base PostgreSQL, avec les secrets `DATABASE_URL` et `DISCORD_WEBHOOK_URL`. L'analyse ne concerne que le stock en vente : relevé de prix et de rang EDHREC, veille spoilers/réimpressions et Reddit (bans, rumeurs), puis alertes Discord en embeds riches (prix, quantité, contexte, verdict). Le contexte et le verdict viennent de `services/stock_advisor.py` (règles locales, sans API externe). `daily_update.yml` reste un test manuel de livraison Discord. Sans `DATABASE_URL`, le moniteur refuse de tourner sur un runner pour ne pas écrire dans une base SQLite éphémère.
+GitHub Actions : `stock_analysis.yml` lance l'analyse deux fois par jour (07:00 et 19:00 UTC, soit 8h/20h en heure d'hiver ; et à la demande) sur la base PostgreSQL, avec les secrets `DATABASE_URL` et `DISCORD_WEBHOOK_URL`. L'analyse ne concerne que le stock en vente : relevé de prix et de rang EDHREC, veille spoilers/réimpressions et Reddit (bans, rumeurs), puis récapitulatif Discord des alertes. Le contexte et le verdict sont conservés dans le récapitulatif et l'application ; ils viennent de `services/stock_advisor.py` (règles locales, sans API externe). `daily_update.yml` reste un test manuel de livraison Discord. Sans `DATABASE_URL`, le moniteur refuse de tourner sur un runner pour ne pas écrire dans une base SQLite éphémère.
 `backup.yml` crée chaque dimanche à 03:30 UTC (et à la demande) une sauvegarde chiffrée, publiée comme artefact GitHub
 conservé 90 jours (secrets `DATABASE_URL` et `BACKUP_ENCRYPTION_KEY`).
 `weekly_report.yml` envoie chaque lundi à 07:00 UTC un rapport Discord (valeur du stock, plus-value latente, plus fortes hausses/baisses sur 7 jours, ventes de la semaine), construit par `services/weekly_report.py`.

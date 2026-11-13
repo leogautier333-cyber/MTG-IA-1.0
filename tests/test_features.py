@@ -108,11 +108,8 @@ class TargetAndSourceAlertTests(unittest.TestCase):
         self.assertEqual(result["alerts_created"], 0)
         result, post = self._analyze("12.00")
         self.assertEqual(result["alerts_created"], 2)
-        self.assertEqual(post.call_count, 2)
-        self.assertTrue(any(
-            "objectif" in call.kwargs["json"]["embeds"][0]["description"]
-            for call in post.call_args_list
-        ))
+        self.assertEqual(post.call_count, 1)
+        self.assertIn("objectif", post.call_args.kwargs["json"]["embeds"][0]["description"])
         result, post = self._analyze("13.00")
         self.assertEqual(result["alerts_created"], 0)
         post.assert_not_called()

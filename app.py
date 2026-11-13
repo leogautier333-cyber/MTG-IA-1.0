@@ -940,7 +940,7 @@ with tab_prices:
         st.success(
             f"{analysis['snapshots_written']} relevé(s) ajouté(s), "
             f"{analysis['alerts_created']} alerte(s) créée(s), "
-            f"{analysis['notifications_sent']} notification(s) envoyée(s)."
+            f"{analysis['notifications_sent']} alerte(s) transmise(s) à Discord."
         )
         for field, label in (
             ("untracked", "Sans identifiant Scryfall"),

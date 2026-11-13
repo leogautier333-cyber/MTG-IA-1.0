@@ -140,7 +140,11 @@ class PhaseOneTests(unittest.TestCase):
         self.assertEqual({key: value["trend"] for key, value in alerts.items()},
                          {"up": "UP", "down": "DOWN", "stable": "STABLE"})
         self.assertEqual(alerts["up"]["quantity"], 2)
-        self.assertEqual(send.call_count, 3)
+        self.assertEqual(send.call_count, 1)
+        description = send.call_args.kwargs["json"]["embeds"][0]["description"]
+        self.assertIn("Hausses (1)", description)
+        self.assertIn("Baisses (1)", description)
+        self.assertIn("Stagnations (1)", description)
 
     def test_ten_percent_drop_creates_pending_alert_without_webhook(self):
         inventory.save_collection([_card()])

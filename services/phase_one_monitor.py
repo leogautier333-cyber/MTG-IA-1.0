@@ -20,6 +20,8 @@ POLL_INTERVAL_SECONDS = max(300, int(os.getenv("NEXUS_POLL_INTERVAL_SECONDS", "3
 DISCORD_WEBHOOK_URL = "DISCORD_WEBHOOK_URL"
 PRICE_ALERT = "PRICE"
 COLOR_UP, COLOR_DOWN, COLOR_INFO = 3066993, 15158332, 16760576
+DISCORD_SUMMARY_LIMIT = 3800
+DISCORD_ATTACHMENT_LIMIT = 8 * 1024 * 1024
 
 
 def _price_trend(previous, current):
@@ -189,9 +191,92 @@ def _alert_embed(alert):
     )
 
 
+def _summary_group(alert):
+    kind = alert.get("kind", PRICE_ALERT)
+    if kind == PRICE_ALERT:
+        trend = alert.get("trend")
+        if trend not in {"UP", "DOWN", "STABLE"}:
+            trend = "UP" if float(alert.get("change_pct", 0)) > 0 else "DOWN"
+        return {"UP": "📈 Hausses", "DOWN": "📉 Baisses", "STABLE": "➡️ Stagnations"}[trend]
+    return "🎯 Objectifs atteints" if kind == "TARGET_REACHED" else "📰 Veille du stock"
+
+
+def _summary_line(alert):
+    name = " ".join(str(alert.get("card_name") or "Carte inconnue").split())
+    kind = alert.get("kind", PRICE_ALERT)
+    if kind == PRICE_ALERT and "previous_price" in alert and "current_price" in alert:
+        edition = str(alert.get("set_code") or "n/d").upper()
+        foil = " · foil" if alert.get("foil") else ""
+        quantity = alert.get("quantity", "n/d")
+        line = (
+            f"• {name} [{edition}{foil}] ×{quantity} : "
+            f"{float(alert['previous_price']):.2f} € → {float(alert['current_price']):.2f} € "
+            f"({float(alert.get('change_pct', 0)):+.1f} %)"
+        )
+        if alert.get("popularity_delta_pct") is not None:
+            line += f" · EDHREC {float(alert['popularity_delta_pct']):+.1f} %"
+    else:
+        message = " ".join(str(alert.get("message") or name).split())
+        line = f"• {message}"
+    for key, label in (("context", "Contexte"), ("verdict", "Verdict"), ("source_url", "Source")):
+        if alert.get(key):
+            line += f"\n  {label} : {' '.join(str(alert[key]).split())}"
+    return line
+
+
+def _summary_payload(alerts):
+    groups = {}
+    for alert in alerts:
+        groups.setdefault(_summary_group(alert), []).append(_summary_line(alert))
+    order = ("📈 Hausses", "📉 Baisses", "➡️ Stagnations", "🎯 Objectifs atteints", "📰 Veille du stock")
+    sections = [f"{group} ({len(groups[group])})\n" + "\n".join(groups[group])
+                for group in order if group in groups]
+    report = "\n\n".join(sections)
+    if len(report.encode("utf-16-le")) // 2 <= DISCORD_SUMMARY_LIMIT:
+        description = report
+        attachment = None
+    else:
+        counts = " · ".join(f"{group} : {len(groups[group])}" for group in order if group in groups)
+        description = (
+            f"{counts}\n\nLe détail complet est dans le fichier texte joint "
+            "(une ligne par alerte)."
+        )
+        attachment = report.encode("utf-8")
+        if len(attachment) > DISCORD_ATTACHMENT_LIMIT:
+            raise RuntimeError("Le récapitulatif dépasse la taille maximale de la pièce jointe Discord.")
+    payload = {
+        "embeds": [{"title": f"Récapitulatif du stock · {len(alerts)} alerte(s)",
+                    "description": description, "color": COLOR_INFO}],
+        "allowed_mentions": {"parse": []},
+    }
+    return payload, attachment
+
+
+def _send_alert_summary(alerts, session=requests):
+    webhook_url = os.getenv(DISCORD_WEBHOOK_URL)
+    if not webhook_url:
+        raise RuntimeError("DISCORD_WEBHOOK_URL n'est pas configurée.")
+    payload, attachment = _summary_payload(alerts)
+    try:
+        if attachment is None:
+            response = session.post(webhook_url, json=payload, timeout=10)
+        else:
+            response = session.post(
+                webhook_url,
+                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                files={"files[0]": ("alertes-stock.txt", attachment, "text/plain; charset=utf-8")},
+                timeout=30,
+            )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise RuntimeError(
+            f"Échec de l'envoi Discord ({type(error).__name__}); l'URL du webhook est masquée."
+        ) from None
+
+
 def _deliver_pending_alerts(active_positions, session=requests):
-    sent = 0
     changed = []
+    pending = []
     active_ids = {scryfall_id for scryfall_id, _foil in active_positions}
     for alert in inventory.get_price_alerts():
         if alert.get("status") != "pending":
@@ -204,16 +289,20 @@ def _deliver_pending_alerts(active_positions, session=requests):
             alert["status"] = "cancelled"
             changed.append(alert)
             continue
-        title, description, fields, color = _alert_embed(alert)
+        pending.append(alert)
+    sent = 0
+    if pending:
         try:
-            _send_webhook(title, description, session=session, fields=fields, color=color)
+            _send_alert_summary(pending, session=session)
         except RuntimeError as error:
-            LOGGER.warning("Alerte Discord conservée en attente (%s): %s", alert["id"], error)
-            continue
-        alert["status"] = "sent"
-        alert["sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        changed.append(alert)
-        sent += 1
+            LOGGER.warning("%d alerte(s) Discord conservée(s) en attente : %s", len(pending), error)
+        else:
+            sent_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            for alert in pending:
+                alert["status"] = "sent"
+                alert["sent_at"] = sent_at
+            changed.extend(pending)
+            sent = len(pending)
     if changed:
         inventory.save_price_alerts(changed)
     return sent

@@ -20,7 +20,7 @@ import scryfall
 import data_manager
 from services import (
     alert_triage, cardmarket_import, csv_import, github_actions, portfolio_history, portfolio_metrics,
-    pricing, sales_report, stock_advisor,
+    pricing, sales_report, stock_advisor, stock_filters,
 )
 from services.phase_one_monitor import analyze_stock_prices, send_test_alert
 
@@ -342,25 +342,52 @@ with tab_stock:
 
             target_status = "FOR_SALE" if status_filter == "En Vente" else "SOLD"
 
-            filter_search, filter_language, filter_condition = st.columns([2.2, 1, 1])
+            status_cards = [
+                card for card in collection
+                if card.get("status", "FOR_SALE") == target_status
+            ]
+            filter_search, filter_set, filter_sort = st.columns([2, 1.4, 1.6])
             with filter_search:
-                search_stock = st.text_input("Rechercher une carte", placeholder="Nom, édition…", label_visibility="collapsed")
+                search_stock = st.text_input("Rechercher", placeholder="Nom, code d'extension ou numéro")
+            with filter_set:
+                set_codes = sorted({str(c.get("set_code") or "").upper() for c in status_cards} - {""})
+                set_filter = st.selectbox("Extension", ["Toutes"] + set_codes)
+            with filter_sort:
+                sort_filter = st.selectbox("Trier par", stock_filters.SORT_OPTIONS)
+            filter_language, filter_condition, filter_foil, filter_min, filter_max = st.columns(5)
             with filter_language:
-                languages = sorted({str(c.get("language", "FR")) for c in collection})
-                language_filter = st.selectbox("Langue", ["Toutes"] + languages, label_visibility="collapsed")
+                languages = sorted({str(c.get("language") or "FR") for c in status_cards})
+                language_filter = st.selectbox("Langue", ["Toutes"] + languages)
             with filter_condition:
-                conditions = sorted({str(c.get("condition", "NM")) for c in collection})
-                condition_filter = st.selectbox("État", ["Tous"] + conditions, label_visibility="collapsed")
+                conditions = sorted({str(c.get("condition") or "NM") for c in status_cards})
+                condition_filter = st.selectbox("État", ["Tous"] + conditions)
+            with filter_foil:
+                foil_filter = st.selectbox("Finition", ["Toutes", "Foil", "Non foil"])
+            with filter_min:
+                min_price = st.number_input("Prix min. (€)", min_value=0.0, value=0.0, step=0.5)
+            with filter_max:
+                max_price = st.number_input(
+                    "Prix max. (€)", min_value=0.0, value=0.0, step=0.5,
+                    help="0 signifie sans limite de prix maximum.",
+                )
 
-        indexed_cards = [
-            (index, card) for index, card in enumerate(collection)
-            if card.get("status") == target_status
-            and (not search_stock or search_stock.casefold() in str(card.get("name", "")).casefold()
-                 or search_stock.casefold() in str(card.get("set_code", "")).casefold())
-            and (language_filter == "Toutes" or str(card.get("language", "FR")) == language_filter)
-            and (condition_filter == "Tous" or str(card.get("condition", "NM")) == condition_filter)
-        ]
+        try:
+            indexed_cards = stock_filters.filter_stock(
+                collection, status=target_status, query=search_stock,
+                set_code="" if set_filter == "Toutes" else set_filter,
+                language="" if language_filter == "Toutes" else language_filter,
+                condition="" if condition_filter == "Tous" else condition_filter,
+                foil="" if foil_filter == "Toutes" else foil_filter,
+                min_price=min_price, max_price=max_price or None, sort_by=sort_filter,
+            )
+        except ValueError as error:
+            st.warning(str(error))
+            indexed_cards = []
         filtered_cards = [card for _, card in indexed_cards]
+        st.caption(
+            f"{len(filtered_cards)} ligne(s) · "
+            f"{sum(max(1, int(card.get('quantity') or 1)) for card in filtered_cards)} exemplaire(s)"
+        )
         popularity_by_card = data_manager.get_popularity_deltas(
             tuple(sorted({str(card["scryfall_id"]) for card in filtered_cards if card.get("scryfall_id")}))
         )
@@ -416,8 +443,9 @@ with tab_stock:
             cols = st.columns(cols_per_row)
 
             for idx, card in enumerate(filtered_cards):
+                original_index = indexed_cards[idx][0]
                 scryfall_data = None
-                if card.get("name") and not card.get("scryfall_resolution_pending") and (not card.get("image_url") or not card.get("mana_cost")):
+                if card.get("name") and not card.get("scryfall_resolution_pending") and not card.get("image_url"):
                     scryfall_data = data_manager.get_scryfall_card(card["name"])
                 img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
                 if not img_url and scryfall_data and "card_faces" in scryfall_data:
@@ -447,11 +475,13 @@ with tab_stock:
                         ))
                         if target_status == "FOR_SALE" and card.get("scryfall_id"):
                             with st.popover("Vendre", use_container_width=True):
-                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{idx}")
-                                if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{idx}", type="primary"):
-                                    if data_manager.mark_card_as_sold(card['scryfall_id'], actual_p):
+                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{original_index}")
+                                if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{original_index}", type="primary"):
+                                    if data_manager.mark_selected_card_as_sold(card, actual_p):
                                         st.success("Vendu !")
                                         st.rerun()
+                                    else:
+                                        st.error("Cette fiche a changé : recharge les données avant de réessayer.")
 
         # ---------------------------------------------------------------
         # MODE 2 : TABLEAU ÉPURÉ ET FICHE DÉTAILLÉE
@@ -551,7 +581,7 @@ with tab_stock:
                             step=0.5
                         )
                         if st.button("Confirmer la vente", type="primary"):
-                            if data_manager.mark_card_as_sold(card['scryfall_id'], sale_price):
+                            if data_manager.mark_selected_card_as_sold(card, sale_price):
                                 st.success("Carte enregistrée comme vendue !")
                                 st.rerun()
                             else:
@@ -886,7 +916,11 @@ with tab_search:
 # ===================================================================
 with tab_prices:
     st.header("Courbes de prix & alertes du stock")
-    st.caption("Chaque analyse ajoute un relevé. Discord est alerté à partir de ±10 % entre deux relevés consécutifs.")
+    st.caption(
+        "Entre deux relevés : alerte de baisse à −10 % ou moins, de hausse à +10 % ou plus, "
+        "et de stagnation entre ces seuils. Une alerte de stagnation par carte et finition "
+        "est envoyée au maximum par jour UTC."
+    )
 
     action_col, test_col = st.columns(2)
     if action_col.button("Analyser le stock maintenant", type="primary"):
@@ -908,6 +942,14 @@ with tab_prices:
             f"{analysis['alerts_created']} alerte(s) créée(s), "
             f"{analysis['notifications_sent']} notification(s) envoyée(s)."
         )
+        for field, label in (
+            ("untracked", "Sans identifiant Scryfall"),
+            ("missing_prices", "Sans prix de marché disponible"),
+            ("first_observations", "Premier relevé : comparaison possible à la prochaine analyse"),
+        ):
+            names = analysis.get(field, [])
+            if names:
+                st.warning(f"{label} ({len(names)}) : " + ", ".join(names))
 
     owned_cards = [
         card for card in data_manager.get_collection()
@@ -951,6 +993,9 @@ with tab_prices:
             [{
                 "Carte": alert.get("card_name"),
                 "Type": alert.get("kind", "PRICE"),
+                "Tendance": {"UP": "Hausse", "DOWN": "Baisse", "STABLE": "Stagnation"}.get(
+                    alert.get("trend"), "—"
+                ),
                 "Priorité": alert["priority"],
                 "Variation": f"{alert['change_pct']:+.1f} %" if "change_pct" in alert else "—",
                 "Prix précédent": f"{alert['previous_price']:.2f} €" if "previous_price" in alert else "—",
@@ -962,7 +1007,7 @@ with tab_prices:
                 "Verdict": alert.get("verdict", ""),
                 "État Discord": alert.get("status"),
                 "Date": alert.get("created_at"),
-            } for alert in prioritized_alerts[:50]],
+            } for alert in prioritized_alerts],
             hide_index=True,
             use_container_width=True,
         )

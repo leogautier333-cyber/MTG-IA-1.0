@@ -66,7 +66,7 @@ class PhaseOneTests(unittest.TestCase):
         get_cards.assert_not_called()
         self.assertEqual(result["snapshots_written"], 0)
 
-    def test_variation_below_ten_percent_does_not_alert(self):
+    def test_variation_below_ten_percent_alerts_stagnation_once_per_day(self):
         inventory.save_collection([_card()])
         inventory.record_price_snapshot(
             "stock-card", 10.0, observed_at="2026-10-22T10:00:00+00:00"
@@ -77,8 +77,70 @@ class PhaseOneTests(unittest.TestCase):
         ), patch.object(phase_one_monitor.requests, "post") as send_discord:
             result = phase_one_monitor.analyze_stock_prices()
         self.assertEqual(result["snapshots_written"], 1)
-        self.assertEqual(result["alerts_created"], 0)
+        self.assertEqual(result["alerts_created"], 1)
         send_discord.assert_not_called()
+        alert = inventory.get_price_alerts()[0]
+        self.assertEqual(alert["trend"], "STABLE")
+        title, _, _, color = phase_one_monitor._alert_embed(alert)
+        self.assertIn("STAGNATION", title)
+        self.assertEqual(color, phase_one_monitor.COLOR_INFO)
+        with patch.object(
+            phase_one_monitor.scryfall, "get_cards_batch",
+            return_value=[{"id": "stock-card", "prices": {"eur": "10.99"}}],
+        ), patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": ""}):
+            repeated = phase_one_monitor.analyze_stock_prices()
+        self.assertEqual(repeated["alerts_created"], 0)
+
+    def test_exact_thresholds_and_stagnation_boundaries(self):
+        classify = phase_one_monitor._price_trend
+        self.assertEqual(classify(0.1, 0.11), "UP")
+        self.assertEqual(classify(0.1, 0.09), "DOWN")
+        self.assertEqual(classify(10, 10.999), "STABLE")
+        self.assertEqual(classify(10, 9.001), "STABLE")
+        self.assertEqual(classify(10, 10), "STABLE")
+        self.assertEqual(classify(10, 11.01), "UP")
+        self.assertEqual(classify(10, 8.99), "DOWN")
+
+    def test_missing_prices_and_first_snapshots_are_reported(self):
+        inventory.save_collection([
+            _card("new"), _card("missing"), _card("", name="Sans identifiant"),
+        ])
+        with patch.object(
+            phase_one_monitor.scryfall, "get_cards_batch",
+            return_value=[{"id": "new", "prices": {"eur": "10"}}],
+        ), patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": ""}):
+            result = phase_one_monitor.analyze_stock_prices()
+        self.assertEqual(len(result["first_observations"]), 1)
+        self.assertEqual(len(result["missing_prices"]), 1)
+        self.assertEqual(result["untracked"], ["Sans identifiant"])
+        self.assertEqual(result["alerts_created"], 0)
+
+    def test_analysis_alerts_each_owned_position_for_up_down_and_stable(self):
+        inventory.save_collection([
+            _card("up", quantity=2), _card("down"), _card("stable"),
+            _card("sold", "SOLD"),
+        ])
+        for card_id in ("up", "down", "stable"):
+            inventory.record_price_snapshot(
+                card_id, 10.0, observed_at="2026-10-22T10:00:00+00:00"
+            )
+        response = [
+            {"id": "up", "prices": {"eur": "11"}},
+            {"id": "down", "prices": {"eur": "9"}},
+            {"id": "stable", "prices": {"eur": "10"}},
+        ]
+        with patch.object(phase_one_monitor.scryfall, "get_cards_batch", return_value=response) as fetch, \
+             patch.object(phase_one_monitor.requests, "post", return_value=Mock()) as send, \
+             patch.dict(os.environ, {"DISCORD_WEBHOOK_URL": "https://discord.invalid/webhook"}):
+            result = phase_one_monitor.analyze_stock_prices()
+        self.assertEqual(set(fetch.call_args.args[0]), {"up", "down", "stable"})
+        self.assertEqual(result["alerts_created"], 3)
+        self.assertEqual(result["notifications_sent"], 3)
+        alerts = {item["scryfall_id"]: item for item in inventory.get_price_alerts()}
+        self.assertEqual({key: value["trend"] for key, value in alerts.items()},
+                         {"up": "UP", "down": "DOWN", "stable": "STABLE"})
+        self.assertEqual(alerts["up"]["quantity"], 2)
+        self.assertEqual(send.call_count, 3)
 
     def test_ten_percent_drop_creates_pending_alert_without_webhook(self):
         inventory.save_collection([_card()])

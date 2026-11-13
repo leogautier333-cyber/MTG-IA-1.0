@@ -15,6 +15,8 @@ Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les
 
 Chaque analyse enregistre un relevé par jour et par variante (le dernier relevé du jour remplace le précédent) pour le prix Scryfall EUR normal ou foil. La variation est calculée entre deux relevés consécutifs de la même impression et finition. Une hausse ou baisse d'au moins 10 % crée une alerte (table `price_alerts`) et l'envoie au webhook Discord configuré par `DISCORD_WEBHOOK_URL`. Les alertes non envoyées restent en attente pour une tentative ultérieure.
 
+Une variation strictement comprise entre -10 % et +10 % déclenche une alerte de stagnation : au maximum une par jour UTC et par impression/finition, pour limiter les répétitions. La comparaison est impossible au premier relevé, si l'ancien prix est nul, si Scryfall ne fournit pas de prix ou si la fiche ne possède pas d'identifiant Scryfall ; ces cas sont signalés dans le résultat de l'analyse. La stagnation décrit uniquement l'écart entre deux relevés, pas une tendance prolongée. Avec de nombreuses cartes, les alertes peuvent être nombreuses et certaines rester en attente si Discord refuse temporairement l'envoi.
+
 Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
 
 ## Lancer l'application et le suivi
@@ -55,6 +57,8 @@ Les commandes slash Discord et l'assistant IA (`agents/`, `ai_engine.py`) ne son
 `services/portfolio_metrics.py` calcule couverture, exposition et scénarios; `services/alert_triage.py` classe les alertes; `services/inventory.py` et `database/storage.py` conservent le journal dans la fiche de stock; `services/sales_report.py` compare les ventes à la référence historique.
 
 L'onglet « Stock & Ventes » affiche le nombre d'exemplaires et la valeur aux prix de vente enregistrés, calculée comme la somme des prix unitaires multipliés par les quantités. Il affiche séparément la valeur aux derniers prix Scryfall et leur couverture : les cartes sans relevé ne sont pas incluses dans cette valeur, qui n'est pas un prix de vente garanti. Les expositions par carte et édition et les baisses de 10/20/30 % sont des vues descriptives basées sur les relevés de marché, pas des prévisions. Les données d'achat restent conservées en base mais ne sont pas utilisées dans cette vue.
+
+La liste du stock se filtre par recherche, code d'extension, langue, état, finition et limites de prix de vente unitaires. Elle se trie par prix, nom ou quantité ; ces filtres s'appliquent à la galerie et au tableau. Une vente depuis la liste vise la fiche sélectionnée et est refusée si elle a changé depuis son affichage.
 
 Les alertes de l'onglet « Prix & Alertes » sont triées par impact estimé sur la quantité détenue, part de portefeuille et fraîcheur. Les alertes communautaires restent qualifiées de rumeurs/événements à confirmer; les prix Scryfall sont des références indicatives.
 

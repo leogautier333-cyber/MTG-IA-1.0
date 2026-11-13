@@ -80,6 +80,10 @@ def mark_card_as_sold(scryfall_id, actual_sale_price):
     return storage.mark_inventory_sold(scryfall_id, float(actual_sale_price), _now())
 
 
+def mark_selected_card_as_sold(card, actual_sale_price):
+    return storage.mark_inventory_entry_sold(card, float(actual_sale_price), _now())
+
+
 def update_card(original, quantity, purchase_price, selling_price, target_price=None):
     """Édition rapide d'une seule carte ; False si le stock a changé entre-temps."""
     return storage.update_inventory_card(

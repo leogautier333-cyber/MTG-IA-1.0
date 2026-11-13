@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import requests
 import scryfall
@@ -19,6 +20,17 @@ POLL_INTERVAL_SECONDS = max(300, int(os.getenv("NEXUS_POLL_INTERVAL_SECONDS", "3
 DISCORD_WEBHOOK_URL = "DISCORD_WEBHOOK_URL"
 PRICE_ALERT = "PRICE"
 COLOR_UP, COLOR_DOWN, COLOR_INFO = 3066993, 15158332, 16760576
+
+
+def _price_trend(previous, current):
+    """Compare les prix décimaux sans erreur d'arrondi aux seuils de 10 %."""
+    previous_value, current_value = Decimal(str(previous)), Decimal(str(current))
+    threshold = Decimal(str(ALERT_THRESHOLD_PCT))
+    if current_value * 100 >= previous_value * (100 + threshold):
+        return "UP"
+    if current_value * 100 <= previous_value * (100 - threshold):
+        return "DOWN"
+    return "STABLE"
 
 
 def _send_webhook(title, description, session=requests, webhook_url=None, fields=None, color=COLOR_INFO):
@@ -97,16 +109,21 @@ def _create_price_alert(position, previous, current, observed_at, advice=None, p
     previous_price = float(previous["price_eur"])
     current_price = float(current)
     change_pct = (current_price - previous_price) / previous_price * 100
-    identity = "|".join((
-        position["scryfall_id"], str(position["foil"]),
-        previous["observed_at"], observed_at,
-    ))
+    trend = _price_trend(previous_price, current_price)
+    if trend == "STABLE":
+        identity = "|".join(("stable", position["scryfall_id"], str(position["foil"]), observed_at[:10]))
+    else:
+        identity = "|".join((
+            position["scryfall_id"], str(position["foil"]),
+            previous["observed_at"], observed_at,
+        ))
     alert_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-    direction = "hausse" if change_pct > 0 else "baisse"
+    direction = {"UP": "hausse", "DOWN": "baisse", "STABLE": "stagnation"}[trend]
     advice = advice or {}
     return {
         "id": alert_id,
         "kind": PRICE_ALERT,
+        "trend": trend,
         "status": "pending",
         "created_at": observed_at,
         "scryfall_id": position["scryfall_id"],
@@ -161,10 +178,14 @@ def _alert_embed(alert):
         fields.append({"name": "Contexte IA", "value": alert["context"], "inline": False})
     if alert.get("verdict"):
         fields.append({"name": "Verdict", "value": alert["verdict"], "inline": False})
-    title_label = "HAUSSE" if change_pct > 0 else "BAISSE"
+    trend = alert.get("trend")
+    title_label = {"UP": "HAUSSE", "DOWN": "BAISSE", "STABLE": "STAGNATION"}.get(trend)
+    if not title_label:
+        title_label = "HAUSSE" if change_pct > 0 else "BAISSE"
+    color = {"HAUSSE": COLOR_UP, "BAISSE": COLOR_DOWN, "STAGNATION": COLOR_INFO}[title_label]
     return (
         f"[STOCK · {title_label}] {alert['card_name']}", alert["message"], fields,
-        COLOR_UP if change_pct > 0 else COLOR_DOWN,
+        color,
     )
 
 
@@ -270,12 +291,23 @@ def scan_stock_events(session=requests):
 
 
 def analyze_stock_prices(session=requests, events=()):
-    positions = _stock_positions(inventory.get_collection())
+    collection = inventory.get_collection()
+    untracked = [
+        card.get("name", "Carte inconnue") for card in collection
+        if card.get("status", "FOR_SALE") == "FOR_SALE" and not card.get("scryfall_id")
+    ]
+    positions = _stock_positions(collection)
     if not positions:
+        if untracked:
+            LOGGER.warning(
+                "Aucune position analysable : %d ligne(s) sans identifiant Scryfall.",
+                len(untracked),
+            )
         notifications_sent = _deliver_pending_alerts(set(), session=session)
         return {
             "analyzed": 0, "snapshots_written": 0,
             "alerts_created": 0, "notifications_sent": notifications_sent,
+            "untracked": untracked, "missing_prices": [], "first_observations": [],
         }
 
     events_by_card = {}
@@ -291,15 +323,19 @@ def analyze_stock_prices(session=requests, events=()):
     known_alert_ids = {alert.get("id") for alert in inventory.get_price_alerts()}
     new_alerts = []
     snapshots_written = 0
+    missing_prices = []
+    first_observations = []
 
     for position in positions.values():
         card_data = cards_by_id.get(position["scryfall_id"])
         if not card_data:
+            missing_prices.append(f"{position['name']} ({position['set_code']})")
             continue
         market_data.record_demand_snapshot(position["scryfall_id"], card_data.get("edhrec_rank"))
         price_key = "eur_foil" if position["foil"] else "eur"
         raw_price = (card_data.get("prices") or {}).get(price_key)
         if raw_price in (None, ""):
+            missing_prices.append(f"{position['name']} ({position['set_code']})")
             continue
         current_price = float(raw_price)
         history = inventory.get_variant_price_history(
@@ -319,14 +355,19 @@ def analyze_stock_prices(session=requests, events=()):
                 known_alert_ids.add(target_alert["id"])
 
         if not previous or previous["price_eur"] <= 0:
+            first_observations.append(f"{position['name']} ({position['set_code']})")
             continue
         change_pct = (current_price - previous["price_eur"]) / previous["price_eur"] * 100
-        if abs(change_pct) < ALERT_THRESHOLD_PCT:
-            continue
         popularity_delta = stock_advisor.popularity_delta_pct(position["scryfall_id"])
-        advice = stock_advisor.advise(
-            change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ())
-        )
+        if _price_trend(previous["price_eur"], current_price) == "STABLE":
+            advice = {
+                "context": "Variation entre -10 % et +10 % depuis le relevé précédent.",
+                "verdict": "Prix relativement stable : continuer la surveillance.",
+            }
+        else:
+            advice = stock_advisor.advise(
+                change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ())
+            )
         alert = _create_price_alert(
             position, previous, current_price, observed_at, advice, popularity_delta
         )
@@ -337,11 +378,20 @@ def analyze_stock_prices(session=requests, events=()):
     if new_alerts:
         inventory.save_price_alerts(new_alerts)
     notifications_sent = _deliver_pending_alerts(set(positions), session=session)
+    if untracked or missing_prices or first_observations:
+        LOGGER.warning(
+            "Couverture des prix incomplète : %d ligne(s) sans identifiant Scryfall, "
+            "%d position(s) sans prix, %d premier(s) relevé(s).",
+            len(untracked), len(missing_prices), len(first_observations),
+        )
     return {
         "analyzed": len(positions),
         "snapshots_written": snapshots_written,
         "alerts_created": len(new_alerts),
         "notifications_sent": notifications_sent,
+        "untracked": untracked,
+        "missing_prices": missing_prices,
+        "first_observations": first_observations,
     }
 
 

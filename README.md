@@ -20,6 +20,12 @@ $env:DATABASE_URL = "postgresql://..."
 | `BACKUP_ENCRYPTION_KEY` | GitHub | Chiffrement des sauvegardes |
 | `GITHUB_DISPATCH_TOKEN` | Streamlit | Boutons « Actions GitHub » (jeton limité au dépôt, permission Actions : Read and write) |
 
+Les secrets de l'application Streamlit doivent être définis à la racine du fichier
+de secrets (avant toute section TOML), afin d'être disponibles comme variables
+d'environnement. Pour le bouton de test Discord dans l'application, configurer
+également `DISCORD_WEBHOOK_URL` dans Streamlit. Les secrets Streamlit et GitHub
+Actions sont indépendants ; ne jamais les enregistrer dans Git.
+
 ## Workflows (`.github/workflows`)
 
 - `stock_analysis.yml` : analyse des prix, spoilers, Reddit, alertes (07h et 19h UTC).

@@ -7,6 +7,14 @@ from datetime import date
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
+
+# Root-level Streamlit secrets must be loaded before services read the environment.
+try:
+    len(st.secrets)
+except StreamlitSecretNotFoundError as error:
+    if getattr(error, "error_id", None) != "no-secrets-found":
+        raise
 
 import scryfall
 import data_manager

@@ -1,16 +1,9 @@
 """Bilan réel des ventes : chiffre d'affaires, frais Cardmarket, bénéfice net et rentabilité."""
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from services.inventory import calculate_net_margin
-
-
-def _decimal(value):
-    return Decimal(str(value))
-
-
-def _money(value):
-    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+from services.money import decimal_amount as _decimal, rounded_money as _money
 
 
 def _sold_day(card):

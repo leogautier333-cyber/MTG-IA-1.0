@@ -1,5 +1,8 @@
 """Valeur du stock dans le temps, reconstruite à partir des relevés de prix enregistrés."""
 from bisect import bisect_right
+from decimal import Decimal
+
+from services.money import decimal_amount, rounded_money
 
 
 def _day(value):
@@ -49,10 +52,10 @@ def value_series(collection, price_history, inventory_events=None):
             return
         key = (str(card["scryfall_id"]), "eur_foil" if card.get("foil") else "eur")
         quantity = max(1, int(card.get("quantity") or 1))
-        position = active.setdefault(key, {"quantity": 0, "cost": 0.0})
+        position = active.setdefault(key, {"quantity": 0, "cost": Decimal("0")})
         position["quantity"] += multiplier * quantity
         if not card.get("purchase_price_unknown"):
-            position["cost"] += multiplier * float(card.get("purchase_price") or 0) * quantity
+            position["cost"] += multiplier * decimal_amount(card.get("purchase_price") or 0) * quantity
 
     series = []
     for day in days:
@@ -62,7 +65,7 @@ def value_series(collection, price_history, inventory_events=None):
             apply_card(event["new"], 1)
             event_index += 1
         if start_day and day >= start_day:
-            value = cost = 0.0
+            value = cost = Decimal("0")
             for (card_id, key), position in active.items():
                 if position["quantity"] <= 0:
                     continue
@@ -74,22 +77,22 @@ def value_series(collection, price_history, inventory_events=None):
                     price_dates[(card_id, key)] = known
                 index = bisect_right(known, day) - 1
                 if index >= 0:
-                    value += float(history[known[index]][key]) * position["quantity"]
-            series.append({"date": day, "value": round(value, 2), "cost": round(cost, 2)})
+                    value += decimal_amount(history[known[index]][key]) * position["quantity"]
+            series.append({"date": day, "value": rounded_money(value), "cost": rounded_money(cost)})
             continue
-        value = cost = 0.0
+        value = cost = Decimal("0")
         for card in cards:
             if not _was_held(card, day):
                 continue
             quantity = max(1, int(card.get("quantity") or 1))
             if not card.get("purchase_price_unknown"):
-                cost += float(card.get("purchase_price") or 0) * quantity
+                cost += decimal_amount(card.get("purchase_price") or 0) * quantity
             key = "eur_foil" if card.get("foil") else "eur"
             card_id = str(card["scryfall_id"])
             history = price_history.get(card_id) or {}
             known = price_dates[(card_id, key)]
             index = bisect_right(known, day) - 1
             if index >= 0:
-                value += float(history[known[index]][key]) * quantity
-        series.append({"date": day, "value": round(value, 2), "cost": round(cost, 2)})
+                value += decimal_amount(history[known[index]][key]) * quantity
+        series.append({"date": day, "value": rounded_money(value), "cost": rounded_money(cost)})
     return series

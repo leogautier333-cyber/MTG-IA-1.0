@@ -1,7 +1,8 @@
 """Exposition et valeur estimée du stock actuellement en vente."""
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
+from services.money import rounded_money
 from services.pricing import CM_FEE_PCT, latest_market_price
 
 STALE_AFTER_DAYS = 7
@@ -89,18 +90,15 @@ def summarize(collection, price_history, today=None):
     set_exposure = sorted(set_exposure.items(), key=lambda item: item[1], reverse=True)
     for position in positions:
         position["market_value"] = float(position["market_value"])
-    def money(value):
-        return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-
     return {
         "cards": len(cards),
         "copies": copies,
-        "asking_value": money(asking_value),
-        "invested": money(invested),
-        "priced_cost": money(priced_cost),
-        "gross_value": money(gross_value),
-        "net_value": money(net_value),
-        "unrealized_net": money(known_cost_priced_value * fee_factor - priced_cost),
+        "asking_value": rounded_money(asking_value),
+        "invested": rounded_money(invested),
+        "priced_cost": rounded_money(priced_cost),
+        "gross_value": rounded_money(gross_value),
+        "net_value": rounded_money(net_value),
+        "unrealized_net": rounded_money(known_cost_priced_value * fee_factor - priced_cost),
         "roi_pct": float(round((known_cost_priced_value * fee_factor - priced_cost) / priced_cost * 100, 1)) if priced_cost else None,
         "unknown_cost": unknown_cost,
         "missing_prices": missing_prices,
@@ -111,9 +109,9 @@ def summarize(collection, price_history, today=None):
         "scenarios": [
             {
                 "drop_pct": drop,
-                "value_after_fees": money(gross_value * (1 - Decimal(drop) / 100) * fee_factor),
-                "change_vs_now": money(-net_value * drop / 100),
-                "profit_vs_cost": money(
+                "value_after_fees": rounded_money(gross_value * (1 - Decimal(drop) / 100) * fee_factor),
+                "change_vs_now": rounded_money(-net_value * drop / 100),
+                "profit_vs_cost": rounded_money(
                     known_cost_priced_value * (1 - Decimal(drop) / 100) * fee_factor - priced_cost
                 ),
             }

@@ -71,6 +71,17 @@ class PortfolioTests(unittest.TestCase):
         compared = sales_report.compare_to_market(lines, {"a": {"2026-01-01": {"eur": 0.15}}})
         self.assertEqual(compared[0]["sale_vs_market"], 0.15)
 
+    def test_historical_totals_round_decimal_half_up(self):
+        card = {"scryfall_id": "a", "status": "FOR_SALE", "purchase_price": 2.675}
+        history = {"a": {"2026-01-01": {"eur": 2.675}}}
+        events = [
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": None},
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": card},
+        ]
+        for movements in (None, events):
+            point = portfolio_history.value_series([card], history, movements)[0]
+            self.assertEqual((point["value"], point["cost"]), (2.68, 2.68))
+
     def test_value_series_uses_recorded_quantity_changes_and_sales(self):
         old = {"scryfall_id": "a", "quantity": 1, "purchase_price": 2, "status": "FOR_SALE"}
         new = {**old, "quantity": 3}

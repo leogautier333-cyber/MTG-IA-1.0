@@ -2,12 +2,14 @@
 import argparse
 import logging
 from datetime import date, timedelta
+from decimal import Decimal
 
 import requests
 
 from database import storage
 from services import inventory, phase_one_monitor, sales_report
 from services.inventory import calculate_net_margin
+from services.money import decimal_amount, rounded_money
 
 LOGGER = logging.getLogger("magic_nexus.weekly_report")
 WINDOW_DAYS = 7
@@ -15,24 +17,24 @@ TOP_MOVERS = 3
 
 
 def stock_totals(collection):
-    value = cost = latent = 0.0
+    value = cost = latent = Decimal("0")
     references = unknown_cost = 0
     for card in collection:
         if card.get("status", "FOR_SALE") != "FOR_SALE":
             continue
         quantity = max(1, int(card.get("quantity") or 1))
         selling = float(card.get("selling_price") or 0)
-        value += selling * quantity
+        value += decimal_amount(selling) * quantity
         if card.get("purchase_price_unknown"):
             unknown_cost += 1
         else:
             purchase = float(card.get("purchase_price") or 0)
-            cost += purchase * quantity
-            latent += calculate_net_margin(selling, purchase)["net_profit"] * quantity
+            cost += decimal_amount(purchase) * quantity
+            latent += decimal_amount(calculate_net_margin(selling, purchase)["net_profit"]) * quantity
         references += 1
     return {
-        "references": references, "value": round(value, 2),
-        "cost": round(cost, 2), "latent_profit": round(latent, 2),
+        "references": references, "value": rounded_money(value),
+        "cost": rounded_money(cost), "latent_profit": rounded_money(latent),
         "unknown_cost": unknown_cost,
     }
 

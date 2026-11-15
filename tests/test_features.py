@@ -71,6 +71,12 @@ class WeeklyReportTests(unittest.TestCase):
         self.assertEqual(totals["value"], 20.0)
         self.assertEqual(totals["cost"], 8.0)
 
+    def test_weekly_totals_round_decimal_half_up(self):
+        card = _card("a", quantity=1, selling_price=2.675, purchase_price=2.675)
+        totals = weekly_report.stock_totals([card])
+        self.assertEqual(totals["value"], 2.68)
+        self.assertEqual(totals["cost"], 2.68)
+
     def test_movers_are_sorted_and_need_a_week_of_history(self):
         today = date(2026, 10, 29)
         history = _history({

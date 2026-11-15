@@ -99,6 +99,23 @@ assert app.exception
 """,
         )
 
+    def test_scryfall_timeout_is_shown_to_user(self):
+        self.run_app(
+            None,
+            """
+from unittest.mock import patch
+import requests
+from streamlit.testing.v1 import AppTest
+
+with patch("requests.get", side_effect=requests.Timeout("test")):
+    app = AppTest.from_file("app.py", default_timeout=60).run()
+    search = next(item for item in app.text_input if item.label.startswith("Nom de la carte"))
+    search.input("Test").run()
+assert not app.exception
+assert any("Scryfall indisponible" in item.value for item in app.error)
+""",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

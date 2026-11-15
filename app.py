@@ -46,6 +46,14 @@ def github_latest_run(workflow_file):
     return github_actions.latest_run(workflow_file)
 
 
+def scryfall_for_display(function, *args):
+    try:
+        return function(*args)
+    except requests.RequestException as error:
+        st.error(f"Scryfall indisponible ({type(error).__name__}) ; réessaie plus tard.")
+        st.stop()
+
+
 def price_history_frame(history):
     """Relevés de prix avec une colonne Date, tolérante aux anciens formats (2026-09-23_22h)."""
     frame = pd.DataFrame(history)
@@ -834,15 +842,18 @@ with tab_search:
     query = st.text_input("Nom de la carte (FR ou EN) :", placeholder="ex: Sheoldred, Raavan, Atraxa...")
 
     if query and len(query) >= 2:
-        suggestions = scryfall.search_card_autocomplete(query)
+        suggestions = scryfall_for_display(scryfall.search_card_autocomplete, query)
         if suggestions:
             selected_name = st.selectbox("Suggestions trouvées :", suggestions)
 
             if selected_name:
-                card_data = scryfall.get_card_by_name(selected_name)
+                card_data = scryfall_for_display(scryfall.get_card_by_name, selected_name)
                 if card_data:
                     oracle_id = card_data.get("oracle_id")
-                    prints = scryfall.get_card_prints(oracle_id) if oracle_id else [card_data]
+                    prints = scryfall_for_display(scryfall.get_card_prints, oracle_id) if oracle_id else [card_data]
+                    if not prints:
+                        st.warning("Aucune liste d'éditions disponible ; seule la carte trouvée est affichée.")
+                        prints = [card_data]
 
                     print_options = [
                         f"{p.get('set_name')} ({p.get('set').upper()}) #{p.get('collector_number')}"

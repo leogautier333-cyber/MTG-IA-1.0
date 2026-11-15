@@ -236,7 +236,12 @@ def render_nexus_tab():
         deck_metrics = st.columns(3)
         deck_metrics[0].metric("Cartes requises", deck_analysis["required_count"])
         deck_metrics[1].metric("Déjà en stock", deck_analysis["owned_count"])
-        deck_metrics[2].metric("Acquisition estimée", f"{deck_analysis['estimated_acquisition_cost_eur']:.2f} €")
+        deck_value = (
+            "—" if deck_analysis["unpriced_count"]
+            and all(card["price_eur"] is None for card in deck_analysis["missing"])
+            else f"{deck_analysis['estimated_acquisition_cost_eur']:.2f} €"
+        )
+        deck_metrics[2].metric("Acquisition estimée", deck_value)
         if deck_analysis["unpriced_count"]:
             st.warning(
                 f"Estimation partielle : {deck_analysis['unpriced_count']} exemplaire(s) sans prix."

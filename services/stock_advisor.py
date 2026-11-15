@@ -71,13 +71,13 @@ def advise(change_pct, popularity_delta=None, events=()):
         if rising:
             return {
                 "kind": "REPRINT_RISK",
-                "context": "Hausse alors qu'une réimpression est annoncée : le prix risque de s'effondrer.",
-                "verdict": "Vente conseillée pour sécuriser la plus-value avant la réimpression.",
+                "context": "Hausse observée malgré un signal de réimpression annoncée ou supposée.",
+                "verdict": "Vérifier la source et évaluer le risque avant toute décision.",
             }
         return {
             "kind": "REPRINT_DROP",
-            "context": "Baisse suite à une réimpression annoncée ou rumorisée.",
-            "verdict": "Éviter d'acheter ; vendre si le stock dépasse ton objectif de sortie.",
+            "context": "Baisse observée en présence d'un signal de réimpression, sans causalité établie.",
+            "verdict": "Vérifier la source et évaluer le risque avant toute décision.",
         }
     if kinds & BAN_EVENTS:
         return {
@@ -88,15 +88,15 @@ def advise(change_pct, popularity_delta=None, events=()):
     if rising and change_pct >= SPECULATIVE_RISE_PCT and popular_flat_or_down:
         return {
             "kind": "SPECULATIVE_BUBBLE",
-            "context": f"Forte hausse ({change_pct:+.0f} %) sans demande organique ({popularity_text}) : "
-                       "possible buyout artificiel.",
-            "verdict": "Vente conseillée pour sécuriser la plus-value.",
+            "context": f"Forte hausse ({change_pct:+.0f} %) sans progression mesurée du rang "
+                       f"({popularity_text}) : une anomalie possible, pas une preuve de manipulation.",
+            "verdict": "Vérifier les sources et envisager les options sans présumer de la tendance.",
         }
     if rising and popular_up:
         return {
             "kind": "HEALTHY_RISE",
-            "context": f"Hausse liée à une forte adoption ({popularity_text}) : demande organique.",
-            "verdict": "Conserver, tendance saine.",
+            "context": f"Hausse observée avec une popularité EDHREC en progression ({popularity_text}).",
+            "verdict": "Surveiller : la relation causale et l'évolution future restent incertaines.",
         }
     if rising:
         return {
@@ -107,8 +107,8 @@ def advise(change_pct, popularity_delta=None, events=()):
     if popular_up:
         return {
             "kind": "TEMPORARY_DROP",
-            "context": f"Baisse malgré une popularité en hausse ({popularity_text}) : probablement temporaire.",
-            "verdict": "Conserver et attendre le rebond.",
+            "context": f"Baisse malgré une popularité en hausse ({popularity_text}) ; durée inconnue.",
+            "verdict": "Surveiller : un rebond n'est pas garanti.",
         }
     return {
         "kind": "UNEXPLAINED_DROP",
@@ -121,7 +121,7 @@ def advise_event(alert):
     """Verdict pour une alerte d'événement (spoiler, hype Reddit, ban) sur une carte du stock."""
     category = alert.get("category") or alert.get("event_type")
     if category in REPRINT_EVENTS:
-        return {"verdict": "Envisager de vendre avant la sortie pour éviter la baisse liée à la réimpression."}
+        return {"verdict": "Vérifier la réimpression et évaluer le risque avant d'envisager de vendre."}
     if category in BAN_EVENTS:
         return {"verdict": "Vérifier l'annonce officielle ; un ban peut faire varier le prix dans les deux sens."}
     if category == "SPECULATIVE_PUMP":

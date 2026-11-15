@@ -89,7 +89,8 @@ def query_collection(query="", include_sold=False):
         "cards": [{
             key: card.get(key) for key in (
                 "scryfall_id", "name", "set_code", "quantity", "foil", "language",
-                "condition", "status", "purchase_price", "selling_price", "actual_sale_price",
+                "condition", "status", "purchase_price", "purchase_price_unknown",
+                "selling_price", "actual_sale_price",
             )
         } for card in cards],
     }

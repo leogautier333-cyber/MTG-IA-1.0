@@ -61,20 +61,30 @@ def answer_local_query(query, collection, watchlist):
         )
 
     if any(word in text for word in ("roi", "rentabil", "bénéfice", "benefice", "profit")):
+        if summary["sold_unknown_cost"] == summary["sold_count"] and summary["sold_count"]:
+            return "Bénéfice et ROI indisponibles : le prix d'achat des ventes est inconnu."
+        coverage = (
+            f" Résultat partiel : {summary['sold_unknown_cost']} vente(s) sans coût connu exclue(s)."
+            if summary["sold_unknown_cost"] else ""
+        )
         return (
             f"Sur les cartes vendues enregistrées : bénéfice net estimé {summary['realized_profit']:.2f} €, "
             f"ROI réalisé {summary['realized_roi_pct']:.1f} % sur le coût d'achat. "
             "Le calcul applique une commission estimée de 5 % et exclut les frais d'envoi."
+            + coverage
         )
 
     if any(word in text for word in ("stock", "collection", "possède", "possede", "possédé", "possedees")):
         cards = [card for card in collection if card.get("status") == "FOR_SALE"]
         if not cards:
             return "Aucune carte en vente n'est enregistrée dans ta collection."
+        coverage = (f" Le coût est inconnu pour {summary['held_unknown_cost']} référence(s)."
+                    if summary["held_unknown_cost"] else "")
         return (
             f"Tu as {summary['for_sale_count']} référence(s) en vente, pour une valeur affichée de "
             f"{summary['stock_value']:.2f} € et {summary['invested_capital']:.2f} € de coût d'achat. "
             f"Cartes : {', '.join(card.get('name', 'Carte') for card in cards[:12])}."
+            + coverage
         )
 
     return "Je peux analyser ton stock, ton ROI réalisé, ta watchlist ou composer un lot à partir de tes prix affichés. Je n'utilise que les données locales de l'application."

@@ -1131,9 +1131,10 @@ with tab_sales:
                 } for m in months],
                 hide_index=True, width="stretch",
             )
-            st.bar_chart(
-                {m["month"]: m["net_profit"] for m in reversed(months)}, y_label="Bénéfice net (€)"
-            )
+            known_months = {m["month"]: m["net_profit"] for m in reversed(months)
+                            if m["net_profit"] is not None}
+            if known_months:
+                st.bar_chart(known_months, y_label="Bénéfice net (€)")
 
         st.subheader("Détail des ventes")
         st.dataframe(

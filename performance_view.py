@@ -17,6 +17,12 @@ def render_performance_tab():
     sold_cards = [c for c in collection if c.get("status") == "SOLD"]
 
     analytics = analyze_portfolio(collection)
+    if analytics["held_unknown_cost"] or analytics["sold_unknown_cost"]:
+        st.warning(
+            "Les bénéfices et ROI sont partiels : "
+            f"{analytics['held_unknown_cost']} fiche(s) en stock et "
+            f"{analytics['sold_unknown_cost']} vente(s) ont un coût d'achat inconnu."
+        )
     total_value = analytics["stock_value"]
     total_invested = analytics["invested_capital"]
     turnover = analytics["turnover"]
@@ -51,6 +57,8 @@ def render_performance_tab():
                 shipping=sold_card.get("sale_shipping") or 0,
                 condition_discount_pct=0.0,
             )["profit_per_card"]
+            if unit_profit is None:
+                continue
             sold_history_rows.append({
                 "Date": sold_date.normalize(),
                 "Indicateur": "Bénéfice cumulé",
@@ -171,4 +179,9 @@ def render_performance_tab():
             step=0.25, key="performance_sale_shipping",
         )
         sale_result = simulate_sale(sale_card, sale_price, shipping=shipping)
-        st.metric("Produit net estimé", f"{sale_result['net_total']:.2f} €", delta=f"P&L {sale_result['profit_total']:.2f} € · ROI {sale_result['roi_pct']:.1f} %")
+        if sale_result["profit_total"] is None:
+            delta = "Bénéfice indisponible : prix d'achat inconnu"
+        else:
+            roi = f"{sale_result['roi_pct']:.1f} %" if sale_result["roi_pct"] is not None else "indisponible"
+            delta = f"P&L {sale_result['profit_total']:.2f} € · ROI {roi}"
+        st.metric("Produit net estimé", f"{sale_result['net_total']:.2f} €", delta=delta)

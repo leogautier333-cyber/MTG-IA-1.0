@@ -44,7 +44,7 @@ def simulate_sale(card, sale_price, shipping=0.0, cm_fee_pct=0.05,
     fee_per_card = adjusted_price * fee_pct
     net_per_card = adjusted_price - fee_per_card - max(0.0, float(shipping or 0))
     purchase_price = float(card.get("purchase_price") or 0)
-    profit_per_card = net_per_card - purchase_price
+    profit_per_card = None if card.get("purchase_price_unknown") else net_per_card - purchase_price
     return {
         "gross_per_card": round(gross_price, 2),
         "condition_discount_pct": discount_pct * 100,
@@ -52,9 +52,10 @@ def simulate_sale(card, sale_price, shipping=0.0, cm_fee_pct=0.05,
         "fee_per_card": round(fee_per_card, 2),
         "net_per_card": round(net_per_card, 2),
         "net_total": round(net_per_card * quantity, 2),
-        "profit_per_card": round(profit_per_card, 2),
-        "profit_total": round(profit_per_card * quantity, 2),
-        "roi_pct": round(profit_per_card / purchase_price * 100, 1) if purchase_price > 0 else 0.0,
+        "profit_per_card": round(profit_per_card, 2) if profit_per_card is not None else None,
+        "profit_total": round(profit_per_card * quantity, 2) if profit_per_card is not None else None,
+        "roi_pct": round(profit_per_card / purchase_price * 100, 1)
+        if profit_per_card is not None and purchase_price > 0 else None,
         "quantity": quantity,
     }
 
@@ -63,6 +64,12 @@ def analyze_portfolio(collection, today=None):
     today = today or date.today()
     held_cards = [card for card in collection if card.get("status") == "FOR_SALE"]
     sold_cards = [card for card in collection if card.get("status") == "SOLD"]
+    held_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in held_cards)
+    sold_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in sold_cards)
+    sold_known_cost = sum(
+        float(card.get("purchase_price") or 0) * _quantity(card)
+        for card in sold_cards if not card.get("purchase_price_unknown")
+    )
     invested = 0.0
     market_value = 0.0
     unrealized_profit = 0.0
@@ -78,6 +85,7 @@ def analyze_portfolio(collection, today=None):
     for card in collection:
         quantity = _quantity(card)
         purchase_price = float(card.get("purchase_price") or 0)
+        cost_known = not card.get("purchase_price_unknown")
         cost_basis = purchase_price * quantity
         added = _parse_day(card.get("date_added"))
         sold = _parse_day(card.get("date_sold"))
@@ -87,10 +95,11 @@ def analyze_portfolio(collection, today=None):
         if card.get("status") == "FOR_SALE":
             current_price = _current_price(card)
             position_value = current_price * quantity
-            position_profit = (current_price - purchase_price) * quantity
+            position_profit = (current_price - purchase_price) * quantity if cost_known else None
             market_value += position_value
-            invested += cost_basis
-            unrealized_profit += position_profit
+            if cost_known:
+                invested += cost_basis
+                unrealized_profit += position_profit
             liquidity_numerator += position_value * LIQUIDITY_SCORES.get(
                 str(card.get("liquidity_rating", "MEDIUM")).upper(), 0.5
             )
@@ -99,7 +108,8 @@ def analyze_portfolio(collection, today=None):
                 "set_code": card.get("set_code", ""),
                 "market_value": position_value,
                 "unrealized_profit": position_profit,
-                "roi_pct": (current_price - purchase_price) / purchase_price * 100 if purchase_price else 0.0,
+                "roi_pct": (current_price - purchase_price) / purchase_price * 100
+                if cost_known and purchase_price else None,
                 "weight_pct": 0.0,
             })
             card_metrics.append({
@@ -109,7 +119,8 @@ def analyze_portfolio(collection, today=None):
                 "quantity": quantity,
                 "current_price": current_price,
                 "unrealized_profit": position_profit,
-                "roi_pct": (current_price - purchase_price) / purchase_price * 100 if purchase_price else 0.0,
+                "roi_pct": (current_price - purchase_price) / purchase_price * 100
+                if cost_known and purchase_price else None,
             })
             sale = None
         elif card.get("status") == "SOLD":
@@ -118,7 +129,8 @@ def analyze_portfolio(collection, today=None):
                 shipping=card.get("sale_shipping") or 0,
                 condition_discount_pct=0.0,
             )
-            realized_profit += sale["profit_total"]
+            if sale["profit_total"] is not None:
+                realized_profit += sale["profit_total"]
             turnover += float(card.get("actual_sale_price") or 0) * quantity
             card_metrics.append({
                 "scryfall_id": card.get("scryfall_id"),
@@ -131,6 +143,8 @@ def analyze_portfolio(collection, today=None):
         else:
             continue
 
+        if not cost_known:
+            continue
         unit_profit = sale["profit_per_card"] if sale else current_price - purchase_price
         group = set_totals.setdefault(card.get("set_code", "unknown"), {"invested": 0.0, "profit": 0.0})
         group["invested"] += cost_basis
@@ -156,13 +170,13 @@ def analyze_portfolio(collection, today=None):
         "invested_capital": invested,
         "turnover": turnover,
         "realized_profit": realized_profit,
-        "realized_roi_pct": realized_profit / sum(
-            float(card.get("purchase_price") or 0) * _quantity(card) for card in sold_cards
-        ) * 100 if sold_cards and sum(float(card.get("purchase_price") or 0) * _quantity(card) for card in sold_cards) else 0.0,
+        "realized_roi_pct": realized_profit / sold_known_cost * 100 if sold_known_cost else 0.0,
         "unrealized_profit": unrealized_profit,
         "unrealized_roi_pct": unrealized_profit / invested * 100 if invested else 0.0,
         "for_sale_count": len(held_cards),
         "sold_count": len(sold_cards),
+        "held_unknown_cost": held_unknown_cost,
+        "sold_unknown_cost": sold_unknown_cost,
         "average_holding_days": sum(holding_days) / len(holding_days) if holding_days else 0.0,
         "top_ten_concentration_pct": concentration,
         "liquidity_index": liquidity_numerator / market_value * 100 if market_value else 0.0,

@@ -72,6 +72,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(portfolio["unrealized_profit"], 22)
         self.assertAlmostEqual(portfolio["by_format"]["commander"]["roi_pct"], 110)
 
+    def test_unknown_cost_is_excluded_from_analytics_and_sale_simulation(self):
+        unknown = {"scryfall_id": "u", "name": "Unknown", "status": "FOR_SALE",
+                   "purchase_price": 0, "purchase_price_unknown": True, "selling_price": 10}
+        known = {"scryfall_id": "k", "name": "Known", "status": "FOR_SALE",
+                 "purchase_price": 4, "selling_price": 10}
+        sale = simulate_sale(unknown, 10)
+        self.assertEqual(sale["net_total"], 9.5)
+        self.assertIsNone(sale["profit_total"])
+        portfolio = analyze_portfolio([unknown, known])
+        self.assertEqual(portfolio["stock_value"], 20)
+        self.assertEqual(portfolio["unrealized_profit"], 6)
+        self.assertEqual(portfolio["held_unknown_cost"], 1)
+
     def test_reprint_history_and_buyout_proxy_require_evidence(self):
         old_print = {
             "id": "old", "oracle_id": "oracle-1", "name": "Card",

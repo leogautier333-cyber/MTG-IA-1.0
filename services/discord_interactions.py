@@ -39,10 +39,19 @@ def create_bot():
     @bot.tree.command(name="portfolio", description="Afficher la synthèse du portefeuille")
     async def portfolio_command(interaction: discord.Interaction):
         summary = portfolio_summary(data_manager.get_collection())
+        unrealized = (f"{summary['unrealized_profit']:.2f} €"
+                      if summary["held_unknown_cost"] < summary["for_sale_count"] else "indisponible")
+        realized = (f"{summary['realized_profit']:.2f} €"
+                    if summary["sold_unknown_cost"] < summary["sold_count"] else "indisponible")
+        cost_note = (
+            f" · coûts inconnus : {summary['held_unknown_cost']} en stock, "
+            f"{summary['sold_unknown_cost']} vendue(s) ; P&L partiels"
+            if summary["held_unknown_cost"] or summary["sold_unknown_cost"] else ""
+        )
         await interaction.response.send_message(
             f"Stock : {summary['stock_value']:.2f} € · P&L latent : "
-            f"{summary['unrealized_profit']:.2f} € · P&L réalisé : "
-            f"{summary['realized_profit']:.2f} € · {summary['for_sale_count']} référence(s).",
+            f"{unrealized} · P&L réalisé : "
+            f"{realized} · {summary['for_sale_count']} référence(s){cost_note}.",
             ephemeral=True,
         )
 

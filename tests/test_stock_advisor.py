@@ -13,13 +13,13 @@ class AdvisorRulesTests(unittest.TestCase):
     def test_healthy_rise_when_popularity_grows(self):
         advice = stock_advisor.advise(12.0, popularity_delta=15.0)
         self.assertEqual(advice["kind"], "HEALTHY_RISE")
-        self.assertIn("Conserver", advice["verdict"])
+        self.assertIn("incertaines", advice["verdict"])
 
     def test_speculative_bubble_when_price_jumps_without_popularity(self):
         for popularity in (None, 0.0, -5.0):
             advice = stock_advisor.advise(35.0, popularity_delta=popularity)
             self.assertEqual(advice["kind"], "SPECULATIVE_BUBBLE")
-            self.assertIn("Vente conseillée", advice["verdict"])
+            self.assertIn("Vérifier", advice["verdict"])
 
     def test_reprint_event_overrides_price_reading(self):
         advice = stock_advisor.advise(-12.0, None, [{"category": "SPOILER_REPRINT"}])

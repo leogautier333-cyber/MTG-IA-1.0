@@ -11,11 +11,21 @@ def _quantity(card):
     return max(1, int(card.get("quantity") or 1))
 
 
-def _current_price(card):
-    history = storage.get_variant_price_history(
-        card.get("scryfall_id", ""), card.get("foil", False),
-        card.get("language", "FR"), card.get("condition", "NM"),
+def _variant_key(card):
+    return (
+        str(card.get("scryfall_id") or ""), bool(card.get("foil")),
+        str(card.get("language", "FR")), str(card.get("condition", "NM")),
     )
+
+
+def _current_price(card, points_by_variant=None):
+    key = _variant_key(card)
+    if points_by_variant is not None:
+        points = points_by_variant.get(key, [])
+        if points:
+            return float(points[-1][1])
+        return float(card.get("selling_price") or 0)
+    history = storage.get_variant_price_history(*key)
     if history:
         return float(history[-1]["price_eur"])
     return float(card.get("selling_price") or 0)
@@ -64,6 +74,9 @@ def analyze_portfolio(collection, today=None):
     today = today or date.today()
     held_cards = [card for card in collection if card.get("status") == "FOR_SALE"]
     sold_cards = [card for card in collection if card.get("status") == "SOLD"]
+    points_by_variant = storage.get_price_points_batch(
+        _variant_key(card) for card in held_cards if card.get("scryfall_id")
+    )
     held_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in held_cards)
     sold_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in sold_cards)
     sold_known_cost = sum(
@@ -93,7 +106,7 @@ def analyze_portfolio(collection, today=None):
             holding_days.append(max(0, ((sold or today) - added).days))
 
         if card.get("status") == "FOR_SALE":
-            current_price = _current_price(card)
+            current_price = _current_price(card, points_by_variant)
             position_value = current_price * quantity
             position_profit = (current_price - purchase_price) * quantity if cost_known else None
             market_value += position_value
@@ -189,10 +202,14 @@ def analyze_portfolio(collection, today=None):
 
 def suggest_arbitrage(collection, max_suggestions=5):
     suggestions = []
+    points_by_variant = storage.get_price_points_batch(
+        _variant_key(card) for card in collection
+        if card.get("status") == "FOR_SALE" and card.get("scryfall_id")
+    )
     for card in collection:
         if card.get("status") != "FOR_SALE" or not card.get("scryfall_id"):
             continue
-        current_price = _current_price(card)
+        current_price = _current_price(card, points_by_variant)
         if current_price <= 0:
             continue
         sale = simulate_sale(card, current_price)

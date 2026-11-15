@@ -82,6 +82,26 @@ class WeeklyReportTests(unittest.TestCase):
         self.assertEqual([m["name"] for m in movers], ["Card a", "Card b"])
         self.assertAlmostEqual(movers[0]["change_pct"], 20.0)
 
+    def test_movers_use_one_database_connection_for_many_variants(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(storage, "DATABASE_PATH", Path(directory) / "weekly.sqlite3"), \
+             patch.object(storage, "DATABASE_URL", None), \
+             patch.dict(os.environ, {"DATABASE_URL": "", "MTG_DATABASE_URL": ""}):
+            for index in range(10):
+                storage.record_price_snapshot(
+                    f"card-{index}", 10, observed_at="2026-10-20T12:00:00+00:00"
+                )
+                storage.record_price_snapshot(
+                    f"card-{index}", 12, observed_at="2026-10-29T12:00:00+00:00"
+                )
+            original_connect = storage._connect
+            with patch.object(storage, "_connect", wraps=original_connect) as connect:
+                movers = weekly_report.price_movers(
+                    [_card(f"card-{index}") for index in range(10)], date(2026, 10, 29)
+                )
+            self.assertEqual(len(movers), 10)
+            self.assertEqual(connect.call_count, 1)
+
     def test_report_is_sent_as_embed_with_all_sections(self):
         with tempfile.TemporaryDirectory() as directory, \
              patch.object(storage, "DATABASE_PATH", Path(directory) / "t.sqlite3"), \

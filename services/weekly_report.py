@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import requests
 
+from database import storage
 from services import inventory, phase_one_monitor, sales_report
 from services.inventory import calculate_net_margin
 
@@ -43,9 +44,23 @@ def _point_day(point):
         return None
 
 
-def price_movers(collection, today, history_for=inventory.get_variant_price_history):
+def price_movers(collection, today, history_for=None):
     """Variation de prix sur 7 jours des cartes en vente, triée de la plus forte hausse à la plus forte baisse."""
     cutoff = today - timedelta(days=WINDOW_DAYS)
+    if history_for is None:
+        variants = {
+            (str(card["scryfall_id"]), bool(card.get("foil")), "FR", "NM")
+            for card in collection
+            if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("scryfall_id")
+        }
+        points_by_variant = storage.get_price_points_batch(variants)
+
+        def history_for(card_id, foil=False):
+            return [
+                {"snapshot_date": day, "price_eur": price}
+                for day, price in points_by_variant[(card_id, foil, "FR", "NM")]
+            ]
+
     seen, movers = set(), []
     for card in collection:
         if card.get("status", "FOR_SALE") != "FOR_SALE" or not card.get("scryfall_id"):
@@ -70,7 +85,7 @@ def price_movers(collection, today, history_for=inventory.get_variant_price_hist
     return sorted(movers, key=lambda mover: mover["change_pct"], reverse=True)
 
 
-def build_report(collection, today=None, history_for=inventory.get_variant_price_history):
+def build_report(collection, today=None, history_for=None):
     today = today or date.today()
     movers = price_movers(collection, today, history_for)
     return {

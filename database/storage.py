@@ -768,7 +768,8 @@ def get_price_history():
     with _database() as connection:
         rows = connection.execute(
             """SELECT scryfall_id, foil, snapshot_date, price_eur
-               FROM price_snapshots ORDER BY snapshot_date, snapshot_id"""
+               FROM price_snapshots WHERE language = 'FR' AND condition = 'NM'
+               ORDER BY snapshot_date, snapshot_id"""
         ).fetchall()
     history = {}
     for row in rows:

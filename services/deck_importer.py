@@ -109,6 +109,7 @@ def analyze_decklist(cards, collection, fetch_prices=True):
     estimated_cost = sum(
         (card["price_eur"] or 0) * card["quantity"] for card in missing
     )
+    unpriced_count = sum(card["quantity"] for card in missing if card["price_eur"] is None)
     deck_names = {_normalize_name(card["name"]) for card in cards}
     excluded_from_deck = [
         card for card in collection
@@ -120,6 +121,7 @@ def analyze_decklist(cards, collection, fetch_prices=True):
         "missing": missing,
         "owned_cards": owned_cards,
         "estimated_acquisition_cost_eur": estimated_cost,
+        "unpriced_count": unpriced_count,
         "excluded_from_deck": excluded_from_deck,
         "play_history_available": False,
     }

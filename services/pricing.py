@@ -8,6 +8,7 @@ LABELS = {
     "TOO_HIGH": "Trop cher vs marché",
     "TOO_LOW": "Trop bas vs marché",
     "ALIGNED": "Aligné",
+    "COST_UNKNOWN": "Prix d'achat inconnu",
 }
 
 
@@ -51,10 +52,14 @@ def suggestions(collection, price_history, min_margin_pct=15.0):
         if card.get("status", "FOR_SALE") != "FOR_SALE" or not card.get("scryfall_id"):
             continue
         market = latest_market_price(price_history, card["scryfall_id"], bool(card.get("foil")))
-        advice = suggest(market, card.get("purchase_price"), card.get("selling_price"), min_margin_pct)
+        advice = (
+            {"status": "COST_UNKNOWN", "suggested": None, "label": LABELS["COST_UNKNOWN"]}
+            if card.get("purchase_price_unknown")
+            else suggest(market, card.get("purchase_price"), card.get("selling_price"), min_margin_pct)
+        )
         lines.append({
             "name": card.get("name", "Carte inconnue"), "foil": bool(card.get("foil")),
-            "purchase_price": float(card.get("purchase_price") or 0),
+            "purchase_price": None if card.get("purchase_price_unknown") else float(card.get("purchase_price") or 0),
             "selling_price": float(card.get("selling_price") or 0),
             "market_price": market, **advice,
         })

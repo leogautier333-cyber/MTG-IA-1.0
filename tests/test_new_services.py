@@ -7,12 +7,19 @@ from unittest import mock
 
 from database import storage
 from services import (
-    alert_triage, csv_import, github_actions, inventory, portfolio_history,
+    alert_triage, csv_import, deck_importer, github_actions, inventory, portfolio_history,
     portfolio_metrics, pricing, sales_report,
 )
 
 
 class PricingTests(unittest.TestCase):
+    def test_unknown_purchase_price_does_not_produce_margin_suggestion(self):
+        card = {"scryfall_id": "a", "status": "FOR_SALE", "purchase_price_unknown": True}
+        line = pricing.suggestions([card], {"a": {"2026-01-01": {"eur": 10}}})[0]
+        self.assertIsNone(line["purchase_price"])
+        self.assertIsNone(line["suggested"])
+        self.assertEqual(line["status"], "COST_UNKNOWN")
+
     def test_minimum_price_includes_fee_and_margin(self):
         self.assertAlmostEqual(pricing.minimum_price(10, 15), 10 * 1.15 / 0.95)
 
@@ -30,6 +37,24 @@ class PricingTests(unittest.TestCase):
 
 
 class PortfolioTests(unittest.TestCase):
+    def test_deck_missing_prices_are_marked_partial(self):
+        with mock.patch.object(deck_importer.scryfall, "get_card_by_name", return_value=None):
+            result = deck_importer.analyze_decklist([{"name": "Test", "quantity": 2}], [])
+        self.assertEqual(result["unpriced_count"], 2)
+        self.assertEqual(result["estimated_acquisition_cost_eur"], 0)
+
+    def test_unrealized_profit_only_uses_priced_known_cost_positions(self):
+        collection = [
+            {"scryfall_id": "a", "purchase_price": 5, "status": "FOR_SALE"},
+            {"scryfall_id": "b", "purchase_price": 8, "status": "FOR_SALE"},
+            {"scryfall_id": "c", "purchase_price": 0, "purchase_price_unknown": True,
+             "status": "FOR_SALE"},
+        ]
+        history = {"a": {"2026-11-12": {"eur": 10}}, "c": {"2026-11-12": {"eur": 50}}}
+        result = portfolio_metrics.summarize(collection, history, today=date(2026, 11, 12))
+        self.assertEqual(result["unrealized_net"], 4.5)
+        self.assertEqual(result["unknown_cost"], 1)
+
     def test_asking_value_uses_only_active_stock_and_quantities_without_market_prices(self):
         collection = [
             {"scryfall_id": "a", "quantity": 3, "selling_price": 1.25, "status": "FOR_SALE"},

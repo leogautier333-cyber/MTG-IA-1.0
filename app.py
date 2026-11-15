@@ -1043,7 +1043,7 @@ with tab_prices:
         st.dataframe(
             [{
                 "Carte": line["name"] + (" ✨" if line["foil"] else ""),
-                "Achat": f"{line['purchase_price']:.2f} €",
+                "Achat": f"{line['purchase_price']:.2f} €" if line["purchase_price"] is not None else "Inconnu",
                 "Mon prix": f"{line['selling_price']:.2f} €",
                 "Marché": f"{line['market_price']:.2f} €" if line["market_price"] else "—",
                 "Suggestion": f"{line['suggested']:.2f} €" if line["suggested"] else "—",
@@ -1096,7 +1096,14 @@ with tab_sales:
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Cartes vendues", total["cards_sold"])
         k2.metric("Chiffre d'affaires", f"{total['revenue']:.2f} €")
-        k3.metric("Bénéfice net", f"{total['net_profit']:+.2f} €", f"{total['roi_percent']:+.1f} % ROI")
+        profit = f"{total['net_profit']:+.2f} €" if total["net_profit"] is not None else "—"
+        roi = f"{total['roi_percent']:+.1f} % ROI" if total["roi_percent"] is not None else "ROI indisponible"
+        k3.metric("Bénéfice net", profit, roi)
+        if total["unknown_cost_sales"]:
+            st.warning(
+                f"Bénéfice et ROI partiels : {total['unknown_cost_sales']} vente(s) "
+                "sans prix d'achat connu sont exclues."
+            )
         k4.metric("Frais Cardmarket", f"{total['fees']:.2f} €")
         if total["market_compared_sales"]:
             k5.metric(
@@ -1129,7 +1136,8 @@ with tab_sales:
             [{
                 "Date": line["sold_on"].isoformat() if line["sold_on"] else "—",
                 "Carte": line["name"], "Édition": line["set_code"], "Qté": line["quantity"],
-                "CA (€)": round(line["revenue"], 2), "Bénéfice net (€)": round(line["net_profit"], 2),
+                "CA (€)": round(line["revenue"], 2),
+                "Bénéfice net (€)": round(line["net_profit"], 2) if line["net_profit"] is not None else None,
                 "Référence marché (€)": round(line["market_reference"], 2)
                 if line["market_reference"] is not None else "—",
                 "Écart vs marché (€)": line["sale_vs_market"]

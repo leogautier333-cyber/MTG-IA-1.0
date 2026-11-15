@@ -125,12 +125,19 @@ class StorageTests(unittest.TestCase):
 
         history = storage.get_price_history()["card-1"]
         self.assertEqual(history["2026-10-14"]["eur"], 1.75)
-        self.assertEqual(history["2026-10-14"]["eur_foil"], 5.0)
+        self.assertNotIn("eur_foil", history["2026-10-14"])
         self.assertEqual(len(storage.get_variant_price_history("card-1")), 3)
         self.assertEqual(
             len(storage.get_variant_price_history("card-1", foil=True, language="EN", condition="LP")),
             1,
         )
+
+    def test_aggregate_history_does_not_mix_variants(self):
+        storage.record_price_snapshot("card", 10, language="FR",
+                                      observed_at="2026-11-01T10:00:00+00:00")
+        storage.record_price_snapshot("card", 99, language="EN",
+                                      observed_at="2026-11-01T11:00:00+00:00")
+        self.assertEqual(storage.get_price_history()["card"]["2026-11-01"]["eur"], 10)
 
     def test_bulk_diff_detects_reprints_and_duel_legality_changes(self):
         initial = market_data.sync_bulk_prints([

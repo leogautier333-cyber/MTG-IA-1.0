@@ -24,6 +24,7 @@ Une variation strictement comprise entre -10 % et +10 % déclenche une alerte de
 Les alertes de stock en attente sont réunies en un seul message Discord par analyse, regroupées par hausse, baisse, stagnation, objectif et veille. Si le texte dépasse la limite d'un embed, le détail complet est joint en fichier texte au même message. Les alertes ne sont marquées envoyées qu'après acceptation par Discord ; les alertes de panne de source restent séparées.
 
 Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
+Les historiques agrégés du tableau de bord utilisent les relevés de référence FR/NM par impression et finition, sans écrasement par les autres variantes. Les coûts d'achat inconnus sont exclus des bénéfices et ROI : les rapports indiquent leur couverture. L'estimation d'une decklist est signalée comme partielle lorsque des prix manquent.
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
 

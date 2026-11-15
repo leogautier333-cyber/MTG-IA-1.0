@@ -21,6 +21,16 @@ def _history(points):
 
 
 class SalesReportTests(unittest.TestCase):
+    def test_unknown_purchase_price_is_excluded_from_profit(self):
+        sold = _card("unknown", "SOLD", purchase_price=0, purchase_price_unknown=True,
+                     actual_sale_price=10.0, date_sold="2026-10-27")
+        lines = sales_report.sale_lines([sold])
+        self.assertIsNone(lines[0]["net_profit"])
+        totals = sales_report.summarize(lines)
+        self.assertEqual(totals["revenue"], 10)
+        self.assertIsNone(totals["net_profit"])
+        self.assertEqual(totals["unknown_cost_sales"], 1)
+
     def test_monthly_summary_applies_fees_quantity_and_ignores_unsold(self):
         collection = [
             _card("a", "SOLD", actual_sale_price=10.0, quantity=2, date_sold="2026-10-05T10:00:00+00:00"),
@@ -46,6 +56,14 @@ class SalesReportTests(unittest.TestCase):
 
 
 class WeeklyReportTests(unittest.TestCase):
+    def test_unknown_cost_is_visible_in_report(self):
+        card = _card("a", purchase_price=0, purchase_price_unknown=True)
+        report = weekly_report.build_report([card], today=date(2026, 10, 29),
+                                            history_for=_history({}))
+        self.assertEqual(report["totals"]["unknown_cost"], 1)
+        fields = weekly_report.report_embed(report)[2]
+        self.assertIn("indisponible", fields[1]["value"])
+
     def test_totals_cover_only_stock_for_sale(self):
         collection = [_card("a", quantity=2), _card("b", "SOLD", actual_sale_price=9.0)]
         totals = weekly_report.stock_totals(collection)

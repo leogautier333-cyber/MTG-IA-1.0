@@ -15,20 +15,24 @@ TOP_MOVERS = 3
 
 def stock_totals(collection):
     value = cost = latent = 0.0
-    references = 0
+    references = unknown_cost = 0
     for card in collection:
         if card.get("status", "FOR_SALE") != "FOR_SALE":
             continue
         quantity = max(1, int(card.get("quantity") or 1))
         selling = float(card.get("selling_price") or 0)
-        purchase = float(card.get("purchase_price") or 0)
         value += selling * quantity
-        cost += purchase * quantity
-        latent += calculate_net_margin(selling, purchase)["net_profit"] * quantity
+        if card.get("purchase_price_unknown"):
+            unknown_cost += 1
+        else:
+            purchase = float(card.get("purchase_price") or 0)
+            cost += purchase * quantity
+            latent += calculate_net_margin(selling, purchase)["net_profit"] * quantity
         references += 1
     return {
         "references": references, "value": round(value, 2),
         "cost": round(cost, 2), "latent_profit": round(latent, 2),
+        "unknown_cost": unknown_cost,
     }
 
 
@@ -85,14 +89,24 @@ def _mover_lines(movers):
 
 def report_embed(report):
     totals, sales = report["totals"], report["sales"]
+    stock_cost_label = (f" · {totals['unknown_cost']} coût(s) inconnu(s)"
+                        if totals["unknown_cost"] else "")
+    sales_profit = (f"{sales['net_profit']:+.2f} €" if sales["net_profit"] is not None
+                    else "indisponible")
+    if sales["unknown_cost_sales"]:
+        sales_profit += f" (partiel : {sales['unknown_cost_sales']} coût(s) inconnu(s))"
+    stock_cost_available = totals["references"] == 0 or totals["unknown_cost"] < totals["references"]
+    latent = f"{totals['latent_profit']:+.2f} €" if stock_cost_available else "indisponible"
+    cost = f"{totals['cost']:.2f} €" if stock_cost_available else "indisponible"
     fields = [
         {"name": "Stock en vente",
          "value": f"{totals['references']} référence(s) · valeur {totals['value']:.2f} €", "inline": False},
-        {"name": "Plus-value latente (nette)", "value": f"{totals['latent_profit']:+.2f} €", "inline": True},
-        {"name": "Capital investi", "value": f"{totals['cost']:.2f} €", "inline": True},
+        {"name": "Plus-value latente (nette)",
+         "value": f"{latent}{stock_cost_label}", "inline": True},
+        {"name": "Capital investi", "value": f"{cost}{stock_cost_label}", "inline": True},
         {"name": "Ventes de la semaine",
          "value": (f"{sales['cards_sold']} carte(s) · CA {sales['revenue']:.2f} € · "
-                   f"bénéfice net {sales['net_profit']:+.2f} €"), "inline": False},
+                   f"bénéfice net {sales_profit}"), "inline": False},
         {"name": "Plus fortes hausses (7 j)", "value": _mover_lines(report["risers"]), "inline": False},
         {"name": "Plus fortes baisses (7 j)", "value": _mover_lines(report["fallers"]), "inline": False},
     ]

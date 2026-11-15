@@ -21,6 +21,7 @@ def sale_lines(collection):
         sale_price = float(card.get("actual_sale_price") or 0)
         purchase_price = float(card.get("purchase_price") or 0)
         margin = calculate_net_margin(sale_price, purchase_price)
+        cost_known = not card.get("purchase_price_unknown", False)
         lines.append({
             "name": card.get("name", "Carte inconnue"),
             "scryfall_id": str(card.get("scryfall_id", "")),
@@ -30,8 +31,8 @@ def sale_lines(collection):
             "quantity": quantity,
             "revenue": sale_price * quantity,
             "fees": margin["cm_fee"] * quantity,
-            "cost": purchase_price * quantity,
-            "net_profit": margin["net_profit"] * quantity,
+            "cost": purchase_price * quantity if cost_known else None,
+            "net_profit": margin["net_profit"] * quantity if cost_known else None,
         })
     return lines
 
@@ -60,21 +61,25 @@ def compare_to_market(lines, price_history):
 
 def summarize(lines):
     revenue = sum(line["revenue"] for line in lines)
-    cost = sum(line["cost"] for line in lines)
-    net_profit = sum(line["net_profit"] for line in lines)
+    known = [line for line in lines if line["cost"] is not None]
+    cost = sum(line["cost"] for line in known)
+    net_profit = sum(line["net_profit"] for line in known)
+    unknown_cost_sales = len(lines) - len(known)
+    profit_available = bool(known) or not lines
     return {
         "cards_sold": sum(line["quantity"] for line in lines),
         "revenue": round(revenue, 2),
         "fees": round(sum(line["fees"] for line in lines), 2),
-        "cost": round(cost, 2),
-        "net_profit": round(net_profit, 2),
+        "cost": round(cost, 2) if profit_available else None,
+        "net_profit": round(net_profit, 2) if profit_available else None,
+        "unknown_cost_sales": unknown_cost_sales,
         "sale_vs_market": round(sum(
             line.get("sale_vs_market") or 0 for line in lines
         ), 2),
         "market_compared_sales": sum(
             1 for line in lines if line.get("market_reference") is not None
         ),
-        "roi_percent": round(net_profit / cost * 100, 1) if cost > 0 else 0.0,
+        "roi_percent": round(net_profit / cost * 100, 1) if cost > 0 else None,
     }
 
 

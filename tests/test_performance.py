@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import ai_engine
 from database import market_data, storage
 from services import market_monitor, market_signals, stock_advisor
 
@@ -78,6 +79,28 @@ class BatchReadTests(unittest.TestCase):
             histories = market_monitor.get_watchlist_observations(watchlist)
         self.assertEqual(histories, expected)
         self.assertEqual(connect.call_count, 1)
+
+    def test_market_predictions_batch_variants_and_ignore_owned_watchlist(self):
+        for card_id, foil, language, prices in (
+            ("a", False, "FR", (10, 12)),
+            ("b", True, "EN", (10, 8)),
+        ):
+            for day, price in enumerate(prices, 10):
+                storage.record_price_snapshot(
+                    card_id, price, foil=foil, language=language,
+                    observed_at=f"2026-10-{day}T10:00:00+00:00",
+                )
+        collection = [{"scryfall_id": "a", "status": "FOR_SALE", "name": "Owned"}]
+        watchlist = [{"scryfall_id": "a", "name": "Owned"},
+                     {"scryfall_id": "b", "foil": True, "language": "EN", "name": "Watched"}]
+        with patch.object(ai_engine, "PREDICTIONS_FILE", storage.DATABASE_PATH.parent / "predictions.json"), \
+             patch.object(storage, "_connect", wraps=storage._connect) as connect:
+            predictions = ai_engine._create_market_predictions(
+                collection, watchlist, ai_engine.datetime(2026, 10, 12)
+            )
+        self.assertEqual(connect.call_count, 1)
+        self.assertEqual([item["category"] for item in predictions], ["SELL_RECOMMENDATION", "BUY_SIGNAL"])
+        self.assertEqual([item["reference_price"] for item in predictions], [12, 8])
 
     def test_large_batch_is_chunked_and_preserves_input_keys(self):
         ids = [f"card-{index}" for index in range(501)]

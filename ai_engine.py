@@ -47,15 +47,19 @@ def _prediction_id(category, scryfall_id, timestamp_key):
     return f"pred_{category.lower()}_{scryfall_id}_{timestamp_key}"
 
 
-def _variant_history(card):
+def _variant_key(card):
+    return (
+        str(card.get("scryfall_id")), bool(card.get("foil")),
+        str(card.get("language", "FR")), str(card.get("condition", "NM")),
+    )
+
+
+def _variant_history(card, histories):
     foil = bool(card.get("foil"))
     price_key = "eur_foil" if foil else "eur"
     return {
         point["snapshot_date"]: {price_key: point["price_eur"]}
-        for point in data_manager.storage.get_variant_price_history(
-            card.get("scryfall_id"), foil, card.get("language", "FR"),
-            card.get("condition", "NM"),
-        )
+        for point in histories[_variant_key(card)]
     }
 
 
@@ -69,6 +73,20 @@ def _create_market_predictions(collection, watchlist, now):
         if isinstance(entry, dict)
     }
     predictions = []
+    owned_ids = {
+        card.get("scryfall_id") for card in collection
+        if card.get("status") == "FOR_SALE" and card.get("scryfall_id")
+    }
+    relevant_cards = [
+        card for card in collection
+        if card.get("status") == "FOR_SALE" and card.get("scryfall_id")
+    ] + [
+        card for card in watchlist
+        if card.get("scryfall_id") and card.get("scryfall_id") not in owned_ids
+    ]
+    histories = data_manager.storage.get_variant_price_histories_batch(
+        _variant_key(card) for card in relevant_cards
+    )
 
     for item in collection:
         if item.get("status") != "FOR_SALE":
@@ -76,7 +94,7 @@ def _create_market_predictions(collection, watchlist, now):
         card_id = item.get("scryfall_id")
         if not card_id:
             continue
-        history = _variant_history(item)
+        history = _variant_history(item, histories)
         dates = sorted(history)
         if len(dates) < 2:
             continue
@@ -125,13 +143,10 @@ def _create_market_predictions(collection, watchlist, now):
         card_id = item.get("scryfall_id")
         if not card_id:
             continue
-        if any(
-            card.get("scryfall_id") == card_id and card.get("status") == "FOR_SALE"
-            for card in collection
-        ):
+        if card_id in owned_ids:
             continue
 
-        history = _variant_history(item)
+        history = _variant_history(item, histories)
         dates = sorted(history)
         if len(dates) < 2:
             continue

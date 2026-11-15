@@ -49,6 +49,28 @@ class PricingTests(unittest.TestCase):
 
 
 class PortfolioTests(unittest.TestCase):
+    def test_metrics_round_monetary_totals_without_binary_float_bias(self):
+        collection = [{"scryfall_id": "a", "status": "FOR_SALE", "selling_price": 2.675,
+                       "purchase_price": 0.1, "quantity": 1}]
+        history = {"a": {"2026-11-12": {"eur": 0.1}}}
+        result = portfolio_metrics.summarize(collection, history, today=date(2026, 11, 12))
+        self.assertEqual(result["asking_value"], 2.68)
+        self.assertEqual(result["net_value"], 0.10)
+        self.assertEqual(result["unrealized_net"], -0.01)
+
+    def test_sales_totals_use_decimal_arithmetic_and_keep_float_api(self):
+        sold = {"scryfall_id": "a", "status": "SOLD", "quantity": 3,
+                "purchase_price": 0.1, "actual_sale_price": 0.2,
+                "date_sold": "2026-01-01"}
+        lines = sales_report.sale_lines([sold])
+        self.assertEqual(lines[0]["revenue"], 0.6)
+        self.assertEqual(lines[0]["cost"], 0.3)
+        summary = sales_report.summarize(lines)
+        self.assertEqual(summary["revenue"], 0.6)
+        self.assertIsInstance(summary["revenue"], float)
+        compared = sales_report.compare_to_market(lines, {"a": {"2026-01-01": {"eur": 0.15}}})
+        self.assertEqual(compared[0]["sale_vs_market"], 0.15)
+
     def test_value_series_uses_recorded_quantity_changes_and_sales(self):
         old = {"scryfall_id": "a", "quantity": 1, "purchase_price": 2, "status": "FOR_SALE"}
         new = {**old, "quantity": 3}

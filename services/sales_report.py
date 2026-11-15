@@ -1,7 +1,16 @@
 """Bilan réel des ventes : chiffre d'affaires, frais Cardmarket, bénéfice net et rentabilité."""
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 
 from services.inventory import calculate_net_margin
+
+
+def _decimal(value):
+    return Decimal(str(value))
+
+
+def _money(value):
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def _sold_day(card):
@@ -29,10 +38,10 @@ def sale_lines(collection):
             "set_code": str(card.get("set_code", "")).upper(),
             "sold_on": _sold_day(card),
             "quantity": quantity,
-            "revenue": sale_price * quantity,
-            "fees": margin["cm_fee"] * quantity,
-            "cost": purchase_price * quantity if cost_known else None,
-            "net_profit": margin["net_profit"] * quantity if cost_known else None,
+            "revenue": float(_decimal(sale_price) * quantity),
+            "fees": float(_decimal(margin["cm_fee"]) * quantity),
+            "cost": float(_decimal(purchase_price) * quantity) if cost_known else None,
+            "net_profit": float(_decimal(margin["net_profit"]) * quantity) if cost_known else None,
         })
     return lines
 
@@ -49,37 +58,36 @@ def compare_to_market(lines, price_history):
         ]
         reference_day = max(known_days, default=None)
         reference = days[reference_day].get(key) if reference_day else None
-        actual = line["revenue"] / line["quantity"]
         line["market_reference"] = float(reference) if reference is not None else None
         line["market_reference_day"] = reference_day
         line["sale_vs_market"] = (
-            round((actual - float(reference)) * line["quantity"], 2)
+            _money(_decimal(line["revenue"]) - _decimal(reference) * line["quantity"])
             if reference is not None else None
         )
     return lines
 
 
 def summarize(lines):
-    revenue = sum(line["revenue"] for line in lines)
+    revenue = sum((_decimal(line["revenue"]) for line in lines), Decimal("0"))
     known = [line for line in lines if line["cost"] is not None]
-    cost = sum(line["cost"] for line in known)
-    net_profit = sum(line["net_profit"] for line in known)
+    cost = sum((_decimal(line["cost"]) for line in known), Decimal("0"))
+    net_profit = sum((_decimal(line["net_profit"]) for line in known), Decimal("0"))
     unknown_cost_sales = len(lines) - len(known)
     profit_available = bool(known) or not lines
     return {
         "cards_sold": sum(line["quantity"] for line in lines),
-        "revenue": round(revenue, 2),
-        "fees": round(sum(line["fees"] for line in lines), 2),
-        "cost": round(cost, 2) if profit_available else None,
-        "net_profit": round(net_profit, 2) if profit_available else None,
+        "revenue": _money(revenue),
+        "fees": _money(sum((_decimal(line["fees"]) for line in lines), Decimal("0"))),
+        "cost": _money(cost) if profit_available else None,
+        "net_profit": _money(net_profit) if profit_available else None,
         "unknown_cost_sales": unknown_cost_sales,
-        "sale_vs_market": round(sum(
-            line.get("sale_vs_market") or 0 for line in lines
-        ), 2),
+        "sale_vs_market": _money(sum(
+            (_decimal(line.get("sale_vs_market") or 0) for line in lines), Decimal("0")
+        )),
         "market_compared_sales": sum(
             1 for line in lines if line.get("market_reference") is not None
         ),
-        "roi_percent": round(net_profit / cost * 100, 1) if cost > 0 else None,
+        "roi_percent": float(round(net_profit / cost * 100, 1)) if cost > 0 else None,
     }
 
 

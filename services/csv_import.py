@@ -1,6 +1,7 @@
 """Import CSV du stock (export Cardmarket, tableur…) : lecture tolérante puis résolution via Scryfall."""
 import csv
 import io
+import math
 
 import scryfall
 
@@ -26,7 +27,8 @@ TRUE_VALUES = {"1", "true", "yes", "oui", "x", "foil", "vrai"}
 def _number(value, default=0.0):
     text = str(value or "").strip().replace("€", "").replace(" ", "").replace(",", ".")
     try:
-        return float(text) if text else default
+        number = float(text) if text else default
+        return number if math.isfinite(number) else None
     except ValueError:
         return None
 
@@ -53,8 +55,9 @@ def parse_csv(text):
         quantity = _number(get("quantity"), 1)
         purchase = _number(get("purchase_price"))
         selling = _number(get("selling_price"))
-        if None in (quantity, purchase, selling):
-            errors.append(f"Ligne {line_number} ignorée : nombre invalide.")
+        if (None in (quantity, purchase, selling) or quantity < 1
+                or not float(quantity).is_integer() or purchase < 0 or selling < 0):
+            errors.append(f"Ligne {line_number} ignorée : quantité ou prix invalide.")
             continue
         if not (get("name") or (get("set_code") and get("collector_number"))):
             continue
@@ -64,7 +67,7 @@ def parse_csv(text):
             "name": get("name"),
             "set_code": get("set_code").casefold(),
             "collector_number": get("collector_number"),
-            "quantity": max(1, int(quantity)),
+            "quantity": int(quantity),
             "purchase_price": purchase,
             "selling_price": selling,
             "condition": get("condition") or "NM",

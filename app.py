@@ -6,6 +6,7 @@ from datetime import date
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
@@ -810,7 +811,11 @@ with tab_search:
             except UnicodeDecodeError:
                 csv_rows, csv_errors = [], ["Fichier illisible : enregistre-le en UTF-8."]
             if csv_rows:
-                resolved_cards, resolve_errors = csv_import.resolve(csv_rows)
+                try:
+                    resolved_cards, resolve_errors = csv_import.resolve(csv_rows)
+                except requests.RequestException as error:
+                    resolved_cards = []
+                    resolve_errors = [f"Scryfall indisponible ({type(error).__name__}) ; import annulé."]
                 csv_errors += resolve_errors
                 if resolved_cards:
                     st.write(f"{len(resolved_cards)} carte(s) prête(s) à importer :")

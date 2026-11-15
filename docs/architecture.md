@@ -25,6 +25,8 @@ Les alertes de stock en attente sont réunies en un seul message Discord par ana
 
 Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
 
+Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
+
 ## Lancer l'application et le suivi
 
 Installer les dépendances du projet avec `python -m pip install -r requirements.txt`, définir `DATABASE_URL` (PostgreSQL), vérifier avec `python -m database.healthcheck`, puis lancer l'interface avec `streamlit run app.py`.

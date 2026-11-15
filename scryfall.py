@@ -23,11 +23,12 @@ def search_card_autocomplete(query: str) -> List[str]:
 
     _rate_limit()
     url = f"{BASE_URL}/cards/autocomplete"
-    response = requests.get(url, params={"q": query}, headers=HEADERS)
+    response = requests.get(url, params={"q": query}, headers=HEADERS, timeout=10)
 
-    if response.status_code == 200:
-        return response.json().get("data", [])
-    return []
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    return response.json().get("data", [])
 
 
 def get_card_by_name(name: str) -> Optional[Dict[str, Any]]:
@@ -38,9 +39,10 @@ def get_card_by_name(name: str) -> Optional[Dict[str, Any]]:
     url = f"{BASE_URL}/cards/named"
     response = requests.get(url, params={"fuzzy": name}, headers=HEADERS, timeout=10)
 
-    if response.status_code == 200:
-        return response.json()
-    return None
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    return response.json()
 
 
 def get_card_prints(oracle_id: str) -> List[Dict[str, Any]]:
@@ -50,11 +52,12 @@ def get_card_prints(oracle_id: str) -> List[Dict[str, Any]]:
     _rate_limit()
     url = f"{BASE_URL}/cards/search"
     params = {"q": f"oracle_id:{oracle_id}", "unique": "prints"}
-    response = requests.get(url, params=params, headers=HEADERS)
+    response = requests.get(url, params=params, headers=HEADERS, timeout=10)
 
-    if response.status_code == 200:
-        return response.json().get("data", [])
-    return []
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    return response.json().get("data", [])
 
 
 def get_cards_by_identifiers(identifiers: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -67,14 +70,13 @@ def get_cards_by_identifiers(identifiers: List[Dict[str, Any]]) -> Dict[str, Any
         chunk = identifiers[i:i + 75]
         _rate_limit()
         response = requests.post(
-            f"{BASE_URL}/cards/collection", json={"identifiers": chunk}, headers=HEADERS
+            f"{BASE_URL}/cards/collection", json={"identifiers": chunk}, headers=HEADERS,
+            timeout=20,
         )
-        if response.status_code == 200:
-            data = response.json()
-            found.extend(data.get("data", []))
-            not_found.extend(data.get("not_found", []))
-        else:
-            not_found.extend(chunk)
+        response.raise_for_status()
+        data = response.json()
+        found.extend(data.get("data", []))
+        not_found.extend(data.get("not_found", []))
     return {"found": found, "not_found": not_found}
 
 
@@ -99,8 +101,8 @@ def get_cards_batch(scryfall_ids: List[str]) -> List[Dict[str, Any]]:
             url, json={"identifiers": identifiers}, headers=HEADERS, timeout=20
         )
 
-        if response.status_code == 200:
-            data = response.json()
-            results.extend(data.get("data", []))
+        response.raise_for_status()
+        data = response.json()
+        results.extend(data.get("data", []))
 
     return results

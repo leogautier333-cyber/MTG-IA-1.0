@@ -150,6 +150,16 @@ class SaleMarketComparisonTests(unittest.TestCase):
 
 
 class CsvImportTests(unittest.TestCase):
+    def test_invalid_quantity_and_prices_are_reported(self):
+        for quantity, price in (("nan", "1"), ("inf", "1"), ("-2", "1"),
+                                ("1.5", "1"), ("1", "-1"), ("1", "inf")):
+            with self.subTest(quantity=quantity, price=price):
+                rows, errors = csv_import.parse_csv(
+                    f"name,quantity,selling_price\nTest,{quantity},{price}\n"
+                )
+                self.assertEqual(rows, [])
+                self.assertEqual(len(errors), 1)
+
     def test_parse_semicolon_french_headers(self):
         rows, errors = csv_import.parse_csv("Nom;Édition;Quantité;Prix d'achat\nSol Ring;c21;2;1,5\n")
         self.assertEqual(errors, [])

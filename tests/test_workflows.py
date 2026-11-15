@@ -85,6 +85,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(portfolio["unrealized_profit"], 6)
         self.assertEqual(portfolio["held_unknown_cost"], 1)
 
+    def test_simulation_uses_the_same_rounded_fee_as_sales_report(self):
+        sale = simulate_sale({"quantity": 1, "purchase_price": 0}, 0.10)
+        self.assertEqual(sale["fee_per_card"], 0.01)
+        self.assertEqual(sale["net_per_card"], 0.09)
+
     def test_reprint_history_and_buyout_proxy_require_evidence(self):
         old_print = {
             "id": "old", "oracle_id": "oracle-1", "name": "Card",

@@ -663,11 +663,12 @@ def mark_inventory_sold(scryfall_id, sale_price, sold_at):
             return False
         card = json.loads(row["payload"])
         card.update(status="SOLD", actual_sale_price=float(sale_price), date_sold=sold_at)
-        connection.execute(
-            "UPDATE inventory SET status = 'SOLD', date_sold = ?, payload = ? WHERE entry_id = ?",
-            (sold_at, _serialize(card), row["entry_id"]),
+        cursor = connection.execute(
+            """UPDATE inventory SET status = 'SOLD', date_sold = ?, payload = ?
+               WHERE entry_id = ? AND status = 'FOR_SALE' AND payload = ?""",
+            (sold_at, _serialize(card), row["entry_id"], row["payload"]),
         )
-    return True
+        return cursor.rowcount == 1
 
 
 def mark_inventory_entry_sold(original, sale_price, sold_at):

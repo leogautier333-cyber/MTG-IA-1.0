@@ -1,4 +1,6 @@
 """Suggestion de prix de vente : prix du marché, frais Cardmarket et marge minimale souhaitée."""
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+
 CM_FEE_PCT = 0.05
 TOLERANCE = 0.10
 
@@ -14,14 +16,25 @@ LABELS = {
 
 def minimum_price(purchase_price, min_margin_pct, fee_pct=CM_FEE_PCT):
     """Prix de vente minimal pour garder `min_margin_pct` % de bénéfice net après frais."""
-    return float(purchase_price or 0) * (1 + min_margin_pct / 100) / (1 - fee_pct)
+    cost = Decimal(str(purchase_price or 0))
+    margin = Decimal(str(min_margin_pct))
+    fee = Decimal(str(fee_pct))
+    return float(cost * (1 + margin / 100) / (1 - fee))
 
 
 def suggest(market_price, purchase_price, selling_price, min_margin_pct=15.0):
     if not market_price or market_price <= 0:
         return {"status": "NO_DATA", "suggested": None, "label": LABELS["NO_DATA"]}
     floor = minimum_price(purchase_price, min_margin_pct)
-    suggested = round(max(float(market_price), floor), 2)
+    suggested = max(Decimal(str(market_price)), Decimal(str(floor))).quantize(
+        Decimal("0.01"), rounding=ROUND_CEILING
+    )
+    required_net = Decimal(str(purchase_price or 0)) * (1 + Decimal(str(min_margin_pct)) / 100)
+    while suggested - (suggested * Decimal(str(CM_FEE_PCT))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    ) < required_net:
+        suggested += Decimal("0.01")
+    suggested = float(suggested)
     selling_price = float(selling_price or 0)
     if market_price < floor:
         status = "BELOW_MIN"

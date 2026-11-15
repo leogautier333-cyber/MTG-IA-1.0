@@ -23,6 +23,18 @@ class PricingTests(unittest.TestCase):
     def test_minimum_price_includes_fee_and_margin(self):
         self.assertAlmostEqual(pricing.minimum_price(10, 15), 10 * 1.15 / 0.95)
 
+    def test_suggested_price_never_rounds_below_minimum(self):
+        advice = pricing.suggest(1.0, 1.0, 1.0, min_margin_pct=0)
+        self.assertEqual(advice["suggested"], 1.06)
+        self.assertGreaterEqual(advice["suggested"], pricing.minimum_price(1, 0))
+        advice = pricing.suggest(1.0, 9.5, 1.0, min_margin_pct=15)
+        self.assertEqual(advice["suggested"], 11.51)
+
+    def test_margin_uses_decimal_half_up_rounding(self):
+        margin = inventory.calculate_net_margin(0.10, 0)
+        self.assertEqual(margin["cm_fee"], 0.01)
+        self.assertEqual(margin["net_profit"], 0.09)
+
     def test_statuses(self):
         self.assertEqual(pricing.suggest(None, 5, 8)["status"], "NO_DATA")
         self.assertEqual(pricing.suggest(5, 10, 12)["status"], "BELOW_MIN")

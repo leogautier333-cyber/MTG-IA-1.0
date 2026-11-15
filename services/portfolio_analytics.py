@@ -1,6 +1,8 @@
 from datetime import date, datetime
+from decimal import Decimal
 
 from database import market_data, storage
+from services.inventory import calculate_net_margin
 
 
 CONDITION_DISCOUNTS = {"NM": 0.0, "EX": 0.03, "LP": 0.05, "GD": 0.08, "PL": 0.15, "PO": 0.25}
@@ -50,21 +52,23 @@ def simulate_sale(card, sale_price, shipping=0.0, cm_fee_pct=0.05,
         discount_pct = CONDITION_DISCOUNTS.get(str(card.get("condition", "NM")).upper(), 0.0)
     discount_pct = min(1.0, max(0.0, float(discount_pct)))
     fee_pct = min(1.0, max(0.0, float(cm_fee_pct)))
-    adjusted_price = gross_price * (1 - discount_pct)
-    fee_per_card = adjusted_price * fee_pct
-    net_per_card = adjusted_price - fee_per_card - max(0.0, float(shipping or 0))
+    adjusted_price = Decimal(str(gross_price)) * (1 - Decimal(str(discount_pct)))
+    shipping = max(0.0, float(shipping or 0))
     purchase_price = float(card.get("purchase_price") or 0)
-    profit_per_card = None if card.get("purchase_price_unknown") else net_per_card - purchase_price
+    proceeds = calculate_net_margin(adjusted_price, 0, shipping, fee_pct)
+    margin = calculate_net_margin(adjusted_price, purchase_price, shipping, fee_pct)
+    net_per_card = proceeds["net_profit"]
+    profit_per_card = None if card.get("purchase_price_unknown") else margin["net_profit"]
     return {
         "gross_per_card": round(gross_price, 2),
         "condition_discount_pct": discount_pct * 100,
-        "adjusted_per_card": round(adjusted_price, 2),
-        "fee_per_card": round(fee_per_card, 2),
-        "net_per_card": round(net_per_card, 2),
-        "net_total": round(net_per_card * quantity, 2),
-        "profit_per_card": round(profit_per_card, 2) if profit_per_card is not None else None,
-        "profit_total": round(profit_per_card * quantity, 2) if profit_per_card is not None else None,
-        "roi_pct": round(profit_per_card / purchase_price * 100, 1)
+        "adjusted_per_card": float(round(adjusted_price, 2)),
+        "fee_per_card": proceeds["cm_fee"],
+        "net_per_card": net_per_card,
+        "net_total": float(Decimal(str(net_per_card)) * quantity),
+        "profit_per_card": profit_per_card,
+        "profit_total": float(Decimal(str(profit_per_card)) * quantity) if profit_per_card is not None else None,
+        "roi_pct": margin["roi_percent"]
         if profit_per_card is not None and purchase_price > 0 else None,
         "quantity": quantity,
     }

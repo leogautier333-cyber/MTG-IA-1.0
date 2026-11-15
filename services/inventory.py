@@ -1,5 +1,6 @@
 """Logique métier du stock, indépendante de Streamlit ; persistance via database.storage."""
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from database import storage
 
@@ -110,15 +111,19 @@ def record_decision(original, decision, notes, horizon=""):
 
 
 def calculate_net_margin(selling_price, purchase_price, shipping=0.0, cm_fee_pct=0.05):
-    selling_price = float(selling_price or 0)
-    purchase_price = float(purchase_price or 0)
-    shipping = float(shipping or 0)
-    fee = selling_price * float(cm_fee_pct)
+    selling_price = Decimal(str(selling_price or 0))
+    purchase_price = Decimal(str(purchase_price or 0))
+    shipping = Decimal(str(shipping or 0))
+    fee = (selling_price * Decimal(str(cm_fee_pct))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
     net_profit = selling_price - fee - shipping - purchase_price
     return {
-        "net_profit": round(net_profit, 2),
-        "roi_percent": round(net_profit / purchase_price * 100, 1) if purchase_price > 0 else 0.0,
-        "cm_fee": round(fee, 2),
+        "net_profit": float(net_profit.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "roi_percent": float((net_profit / purchase_price * 100).quantize(
+            Decimal("0.1"), rounding=ROUND_HALF_UP
+        )) if purchase_price > 0 else 0.0,
+        "cm_fee": float(fee),
     }
 
 

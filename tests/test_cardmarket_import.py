@@ -84,6 +84,33 @@ class CardmarketImportTests(unittest.TestCase):
         self.assertFalse(cards)
         self.assertTrue(errors)
 
+    @patch("services.cardmarket_import.time.sleep")
+    def test_preparation_reuses_product_cache_but_not_failed_responses(self, _sleep):
+        import data_manager
+
+        data_manager.get_cardmarket_product.clear()
+        self.addCleanup(data_manager.get_cardmarket_product.clear)
+        first = cardmarket_import.parse(HEADER + export_line(price="1,25"))
+        second = cardmarket_import.parse(HEADER + export_line(price="3,50"))
+        response = Mock(status_code=200, json=Mock(return_value={
+            "id": "card-1", "cardmarket_id": 123, "name": "Card", "set": "tst",
+        }))
+        with patch("services.cardmarket_import.requests.get", return_value=response) as get:
+            cards, errors = cardmarket_import.resolve(first, fetch=data_manager.get_cardmarket_product)
+            self.assertFalse(errors)
+            self.assertEqual(cards[0]["selling_price"], 1.25)
+            cards, errors = cardmarket_import.resolve(second, fetch=data_manager.get_cardmarket_product)
+            self.assertFalse(errors)
+            self.assertEqual(cards[0]["selling_price"], 3.50)
+            self.assertEqual(get.call_count, 1)
+
+            data_manager.get_cardmarket_product.clear()
+            response.json.return_value = {"id": "bad"}
+            self.assertTrue(cardmarket_import.resolve(first, fetch=data_manager.get_cardmarket_product)[1])
+            response.json.return_value = {"id": "card-1", "cardmarket_id": 123}
+            self.assertFalse(cardmarket_import.resolve(first, fetch=data_manager.get_cardmarket_product)[1])
+            self.assertEqual(get.call_count, 3)
+
 
 class StockSynchronizationTests(unittest.TestCase):
     def setUp(self):

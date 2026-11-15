@@ -83,27 +83,44 @@ def parse(text):
     return rows
 
 
-def resolve(rows, session=requests):
+class InvalidProductResponse(ValueError):
+    pass
+
+
+def fetch_product(product_id, session=requests):
+    time.sleep(0.1)
+    try:
+        response = session.get(
+            f"{scryfall.BASE_URL}/cards/cardmarket/{product_id}",
+            headers=scryfall.HEADERS, timeout=15,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError(f"Scryfall inaccessible ({type(error).__name__}) ; stock inchangé.") from None
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Scryfall a répondu {response.status_code} pour le produit {product_id} ; stock inchangé."
+        )
+    card = response.json()
+    if not isinstance(card, dict) or not card.get("id") or str(card.get("cardmarket_id")) != product_id:
+        raise InvalidProductResponse(f"Réponse Scryfall invalide pour le produit {product_id}.")
+    return card
+
+
+def resolve(rows, session=requests, fetch=None):
     """Identifie les produits exacts, en signalant les produits absents de Scryfall."""
     products = {}
     errors = []
     for product_id in dict.fromkeys(row["product_id"] for row in rows):
-        time.sleep(0.1)
         try:
-            response = session.get(
-                f"{scryfall.BASE_URL}/cards/cardmarket/{product_id}",
-                headers=scryfall.HEADERS, timeout=15,
-            )
-        except requests.RequestException as error:
-            raise RuntimeError(f"Scryfall inaccessible ({type(error).__name__}) ; stock inchangé.") from None
-        if response.status_code == 404:
+            card = fetch(product_id) if fetch else fetch_product(product_id, session)
+        except InvalidProductResponse as error:
+            errors.append(str(error))
+            continue
+        if card is None:
             products[product_id] = None
             continue
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Scryfall a répondu {response.status_code} pour le produit {product_id} ; stock inchangé."
-            )
-        card = response.json()
         if not card.get("id") or str(card.get("cardmarket_id")) != product_id:
             errors.append(f"Réponse Scryfall invalide pour le produit {product_id}.")
             continue

@@ -5,7 +5,7 @@ import streamlit as st
 
 import scryfall
 from database import storage  # noqa: F401  (utilisé via data_manager.storage par les modules Nexus)
-from services import inventory, stock_advisor
+from services import cardmarket_import, inventory, stock_advisor
 from services.inventory import (  # noqa: F401  (ré-exports)
     REQUIRED_COLLECTION_FIELDS,
     calculate_net_margin,
@@ -72,6 +72,11 @@ def get_popularity_deltas(scryfall_ids):
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_scryfall_card(name):
     return scryfall.get_card_by_name(name)
+
+
+@st.cache_data(ttl=3600, max_entries=10000)
+def get_cardmarket_product(product_id):
+    return cardmarket_import.fetch_product(product_id)
 
 
 save_collection = _invalidating(inventory.save_collection)

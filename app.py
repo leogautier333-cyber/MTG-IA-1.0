@@ -740,7 +740,9 @@ with tab_search:
                 try:
                     rows = cardmarket_import.parse(file_bytes.decode("utf-8-sig"))
                     with st.spinner(f"Identification de {len(rows)} ligne(s) via Scryfall…"):
-                        resolved, errors = cardmarket_import.resolve(rows)
+                        resolved, errors = cardmarket_import.resolve(
+                            rows, fetch=data_manager.get_cardmarket_product
+                        )
                     if errors:
                         for error in errors:
                             st.error(error)

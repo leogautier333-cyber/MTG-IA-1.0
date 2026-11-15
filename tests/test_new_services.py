@@ -49,6 +49,32 @@ class PricingTests(unittest.TestCase):
 
 
 class PortfolioTests(unittest.TestCase):
+    def test_value_series_uses_recorded_quantity_changes_and_sales(self):
+        old = {"scryfall_id": "a", "quantity": 1, "purchase_price": 2, "status": "FOR_SALE"}
+        new = {**old, "quantity": 3}
+        sold = {**new, "status": "SOLD"}
+        events = [
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": None},
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": old},
+            {"occurred_at": "2026-01-02T10:00:00Z", "old": old, "new": new},
+            {"occurred_at": "2026-01-03T10:00:00Z", "old": new, "new": sold},
+        ]
+        history = {"a": {f"2026-01-0{day}": {"eur": 10} for day in (1, 2, 3)}}
+        series = portfolio_history.value_series([sold], history, events)
+        self.assertEqual([point["value"] for point in series], [10, 30, 0])
+        self.assertEqual([point["cost"] for point in series], [2, 6, 0])
+
+    def test_value_series_excludes_unknown_cost_even_when_numeric_value_is_present(self):
+        card = {"scryfall_id": "a", "quantity": 2, "purchase_price": 99,
+                "purchase_price_unknown": True, "status": "FOR_SALE"}
+        history = {"a": {"2026-01-01": {"eur": 10}}}
+        events = [
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": None},
+            {"occurred_at": "2026-01-01T10:00:00Z", "old": None, "new": card},
+        ]
+        self.assertEqual(portfolio_history.value_series([card], history, events)[0]["cost"], 0)
+        self.assertEqual(portfolio_history.value_series([card], history)[0]["cost"], 0)
+
     def test_deck_missing_prices_are_marked_partial(self):
         with mock.patch.object(deck_importer.scryfall, "get_card_by_name", return_value=None):
             result = deck_importer.analyze_decklist([{"name": "Test", "quantity": 2}], [])

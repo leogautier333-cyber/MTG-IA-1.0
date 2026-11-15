@@ -5,7 +5,7 @@
 Le stock, l'historique de prix et les alertes de variation vivent dans la base SQL (`database/storage.py`) : PostgreSQL si `DATABASE_URL` est défini (Neon), sinon SQLite locale `data/mtg_manager.sqlite3`. C'est l'unique source de vérité. Les anciens fichiers `data/*.json` ne sont lus qu'une seule fois, à l'initialisation, pour migration ; ils sont ignorés par Git et peuvent servir de copie locale.
 
 La migration refuse un fichier historique illisible ou une importation dans une table déjà remplie ; un fichier absent ne remplace jamais le stock existant. L'initialisation PostgreSQL utilise un verrou partagé entre processus. Une synchronisation Bulk vide ou dont la taille est inférieure à la moitié du catalogue existant est annulée : vérifier la source avant toute intervention manuelle.
-Les évolutions SQL sont numérotées dans `metadata.schema_version` et exécutées sous verrou ; une version plus récente que l'application est refusée. La version 1 couvre l'évolution des colonnes Bulk existantes.
+Les évolutions SQL sont numérotées dans `metadata.schema_version` et exécutées sous verrou ; une version plus récente que l'application est refusée. La version 1 couvre l'évolution des colonnes Bulk existantes. La version 2 enregistre transactionnellement les changements de stock avec une copie avant/après, en commençant par un état initial à la migration.
 Un historique JSON réimporté ne remplace pas un relevé SQL déjà présent. En hébergement, `MTG_REQUIRE_POSTGRES=true` interdit le repli silencieux sur SQLite si l'URL de base est absente.
 
 Organisation du code :
@@ -31,6 +31,7 @@ Une seule analyse peut être active par base à la fois, y compris entre Streaml
 
 Les prix Scryfall sont des références indicatives, pas des transactions garanties. Scryfall ne donne pas ici un prix individualisé par langue ou état; la courbe ne doit donc pas être interprétée comme un prix exact pour toutes les variantes physiques.
 Les historiques agrégés du tableau de bord utilisent les relevés de référence FR/NM par impression et finition, sans écrasement par les autres variantes. Les coûts d'achat inconnus sont exclus des bénéfices et ROI : les rapports indiquent leur couverture. L'estimation d'une decklist est signalée comme partielle lorsque des prix manquent.
+La courbe du portefeuille reconstitue les quantités et coûts en fin de journée UTC à partir de l'état initial et des mouvements enregistrés. Avant cet état initial, elle reste approximative. Les cartes sans prix disponible et les coûts inconnus sont exclus des totaux correspondants ; les copies des fiches dans l'historique augmentent la taille de la base et des sauvegardes. Une ancienne sauvegarde sans mouvements redémarre cet historique au moment de sa restauration.
 Le calcul de marge utilise un arrondi décimal « moitié supérieure » au centime ; une suggestion de prix est arrondie au centime supérieur afin de ne pas passer sous le seuil demandé. Le stockage historique reste en nombres flottants.
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.

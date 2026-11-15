@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import os
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -50,6 +51,86 @@ class StorageTests(unittest.TestCase):
         storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
         with self.assertRaisesRegex(storage.DatabaseConfigurationError, "Unsupported database schema"):
             storage.initialize_database()
+
+    def test_inventory_history_records_updates_and_backup_restores_without_extra_events(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "status": "FOR_SALE", "quantity": 1, "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        before = storage.get_collection()[0]
+        self.assertTrue(storage.update_inventory_card(before, 3, 1, 2))
+        events = storage.get_inventory_events()
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[-1]["old"]["quantity"], 1)
+        self.assertEqual(events[-1]["new"]["quantity"], 3)
+        backup = snapshot.export_database_snapshot()
+        storage.save_collection([])
+        snapshot.restore_database_snapshot(backup)
+        self.assertEqual(storage.get_inventory_events(), events)
+        self.assertEqual(storage.get_collection()[0]["quantity"], 3)
+        self.assertTrue(storage.update_inventory_card(storage.get_collection()[0], 4, 1, 2))
+        self.assertEqual(storage.get_inventory_events()[-1]["new"]["quantity"], 4)
+
+    def test_legacy_backup_restoration_restarts_history_baseline(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        backup = snapshot.export_database_snapshot()
+        del backup["tables"]["inventory_events"]
+        backup["tables"]["metadata"] = [
+            row for row in backup["tables"]["metadata"] if row["key"] != "schema_version"
+        ]
+        snapshot.restore_database_snapshot(backup)
+        events = storage.get_inventory_events()
+        self.assertEqual(len(events), 2)
+        self.assertIsNone(events[0]["new"])
+        self.assertEqual(events[1]["new"], card)
+        self.assertEqual(storage.get_metadata("schema_version"), str(storage.SCHEMA_VERSION))
+
+    def test_version_one_migration_preserves_existing_stock_and_starts_history(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        with storage._database() as connection:
+            for action in ("insert", "update", "delete"):
+                connection.execute(f"DROP TRIGGER inventory_history_{action}")
+            connection.execute("DROP TABLE inventory_events")
+            connection.execute("DROP TABLE inventory_history_control")
+            connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
+        storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
+        self.assertEqual(storage.get_collection(), [card])
+        events = storage.get_inventory_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["new"], card)
+        self.assertEqual(storage.get_metadata("schema_version"), "2")
+
+    def test_failed_inventory_write_and_restore_roll_back_events(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        events = storage.get_inventory_events()
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            with storage._database() as connection:
+                connection.execute("DELETE FROM inventory")
+                raise RuntimeError("rollback")
+        self.assertEqual(storage.get_inventory_events(), events)
+        backup = snapshot.export_database_snapshot()
+        backup["tables"]["inventory"][0]["payload"] = None
+        with self.assertRaises(sqlite3.IntegrityError):
+            snapshot.restore_database_snapshot(backup)
+        self.assertEqual(storage.get_collection(), [card])
+        self.assertEqual(storage.get_inventory_events(), events)
+        storage.save_collection([])
+        self.assertEqual(storage.get_inventory_events()[-1]["old"], card)
+
+    def test_restore_rejects_future_schema_without_changing_stock(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        backup = snapshot.export_database_snapshot()
+        next(row for row in backup["tables"]["metadata"] if row["key"] == "schema_version")["value"] = "999"
+        with self.assertRaisesRegex(ValueError, "version plus récente"):
+            snapshot.restore_database_snapshot(backup)
+        self.assertEqual(storage.get_collection(), [card])
 
     def test_missing_legacy_marker_does_not_erase_existing_stock(self):
         card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",

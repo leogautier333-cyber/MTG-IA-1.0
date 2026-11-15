@@ -1030,12 +1030,16 @@ with tab_prices:
 
     st.divider()
     st.subheader("Valeur du stock dans le temps")
-    st.caption(
-        "Courbe indicative : les quantités et coûts actuels sont appliqués aux dates passées ; "
-        "les mouvements historiques ne sont pas tous enregistrés."
-    )
+    portfolio_prices = data_manager.get_price_history()
+    history_events = data_manager.get_inventory_events() if portfolio_prices else []
+    if history_events:
+        st.caption(
+            f"Mouvements enregistrés depuis le {history_events[0]['occurred_at'][:10]} (UTC). "
+            "Avant cette date, la courbe utilise les quantités et coûts actuels : elle est approximative. "
+            "Les coûts inconnus et les cartes sans prix disponible sont exclus des totaux correspondants."
+        )
     value_points = portfolio_history.value_series(
-        data_manager.get_collection(), data_manager.get_price_history()
+        data_manager.get_collection(), portfolio_prices, history_events
     )
     if len(value_points) >= 1:
         value_frame = pd.DataFrame(value_points).rename(

@@ -64,6 +64,8 @@ class PostgresIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(self.storage.get_metadata("schema_version"), str(self.storage.SCHEMA_VERSION))
         before = inventory.get_collection()
+        events_before = self.storage.get_inventory_events()
+        self.assertEqual(len(events_before), 2)
         backup = snapshot.export_database_snapshot()
         inventory.add_card_to_collection(
             scryfall_id="other", name="Other", set_code="tst",
@@ -71,6 +73,7 @@ class PostgresIntegrationTests(unittest.TestCase):
         )
         snapshot.restore_database_snapshot(backup)
         self.assertEqual(inventory.get_collection(), before)
+        self.assertEqual(self.storage.get_inventory_events(), events_before)
         with tempfile.TemporaryDirectory() as directory, \
              patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
             backup_path = Path(directory) / "test.enc"
@@ -89,6 +92,22 @@ class PostgresIntegrationTests(unittest.TestCase):
                 )
                 raise RuntimeError("rollback")
         self.assertIsNone(self.storage.get_metadata("test_rollback"))
+
+    def test_migration_from_version_one_preserves_stock(self):
+        card = {"scryfall_id": "test", "name": "Test", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        self.storage.save_collection([card])
+        with self.storage._database() as connection:
+            connection.execute("DROP TRIGGER inventory_history_trigger ON inventory")
+            connection.execute("DROP FUNCTION record_inventory_event()")
+            connection.execute("DROP TABLE inventory_events")
+            connection.execute("DROP TABLE inventory_history_control")
+            connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
+        self.storage._INITIALIZED_PATHS.discard(self.url)
+        self.assertEqual(self.storage.get_collection(), [card])
+        events = self.storage.get_inventory_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[1]["new"], card)
 
     def test_analysis_lock_is_shared_between_connections(self):
         from services.phase_one_monitor import _analysis_lock

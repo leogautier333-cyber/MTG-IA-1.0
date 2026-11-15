@@ -21,6 +21,7 @@ def clear_cache():
     get_price_history.clear()
     get_variant_price_history.clear()
     get_price_alerts.clear()
+    get_inventory_events.clear()
     get_popularity_deltas.clear()
 
 
@@ -56,6 +57,11 @@ def get_variant_price_history(scryfall_id, foil=False, language="FR", condition=
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def get_price_alerts():
     return inventory.get_price_alerts()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS)
+def get_inventory_events():
+    return storage.get_inventory_events()
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS)

@@ -14,12 +14,12 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 REQUIRED_TABLES = frozenset({
     "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
     "alerts", "alert_evaluations", "bulk_prints", "card_demand_snapshots",
-    "price_alerts",
+    "price_alerts", "inventory_events", "inventory_history_control",
 })
 
 
@@ -322,6 +322,97 @@ def _migrate_schema(connection):
             """INSERT INTO metadata(key, value) VALUES ('schema_version', '1')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
         )
+    if version < 2:
+        _create_inventory_history(connection)
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', '2')
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+
+
+def _create_inventory_history(connection):
+    if connection.dialect == "postgres":
+        connection.execute("LOCK TABLE inventory IN SHARE ROW EXCLUSIVE MODE")
+        event_id = "BIGSERIAL PRIMARY KEY"
+        timestamp = "to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+    else:
+        event_id = "INTEGER PRIMARY KEY"
+        timestamp = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+    connection.execute(f"""CREATE TABLE inventory_events (
+        event_id {event_id}, occurred_at TEXT NOT NULL, old_payload TEXT, new_payload TEXT
+    )""")
+    connection.execute("""CREATE TABLE inventory_history_control (
+        id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL
+    )""")
+    connection.execute("INSERT INTO inventory_history_control(id, enabled) VALUES (1, 0)")
+    _reset_inventory_history(connection)
+    if connection.dialect == "postgres":
+        connection.execute(f"""
+            CREATE FUNCTION record_inventory_event() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF (SELECT enabled FROM inventory_history_control WHERE id = 1) = 1 THEN
+                    IF TG_OP = 'INSERT' THEN
+                        INSERT INTO inventory_events(occurred_at, old_payload, new_payload)
+                        VALUES ({timestamp}, NULL, NEW.payload);
+                    ELSIF TG_OP = 'DELETE' THEN
+                        INSERT INTO inventory_events(occurred_at, old_payload, new_payload)
+                        VALUES ({timestamp}, OLD.payload, NULL);
+                    ELSIF OLD.payload IS DISTINCT FROM NEW.payload THEN
+                        INSERT INTO inventory_events(occurred_at, old_payload, new_payload)
+                        VALUES ({timestamp}, OLD.payload, NEW.payload);
+                    END IF;
+                END IF;
+                RETURN NULL;
+            END;
+            $$
+        """)
+        connection.execute("""CREATE TRIGGER inventory_history_trigger
+            AFTER INSERT OR UPDATE OR DELETE ON inventory
+            FOR EACH ROW EXECUTE FUNCTION record_inventory_event()""")
+    else:
+        for action, old, new in (
+            ("INSERT", "NULL", "NEW.payload"),
+            ("UPDATE", "OLD.payload", "NEW.payload"),
+            ("DELETE", "OLD.payload", "NULL"),
+        ):
+            condition = " AND OLD.payload <> NEW.payload" if action == "UPDATE" else ""
+            connection.execute(f"""CREATE TRIGGER inventory_history_{action.lower()}
+                AFTER {action} ON inventory
+                WHEN (SELECT enabled FROM inventory_history_control WHERE id = 1) = 1{condition}
+                BEGIN
+                    INSERT INTO inventory_events(occurred_at, old_payload, new_payload)
+                    VALUES ({timestamp}, {old}, {new});
+                END""")
+    connection.execute("UPDATE inventory_history_control SET enabled = 1 WHERE id = 1")
+
+
+def _reset_inventory_history(connection):
+    now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    connection.execute("DELETE FROM inventory_events")
+    connection.execute(
+        "INSERT INTO inventory_events(occurred_at, old_payload, new_payload) VALUES (?, NULL, NULL)",
+        (now,),
+    )
+    connection.execute(
+        """INSERT INTO inventory_events(occurred_at, old_payload, new_payload)
+           SELECT ?, NULL, payload FROM inventory ORDER BY entry_id""",
+        (now,),
+    )
+
+
+def get_inventory_events():
+    with _database() as connection:
+        rows = connection.execute(
+            "SELECT occurred_at, old_payload, new_payload FROM inventory_events ORDER BY event_id"
+        ).fetchall()
+    return [
+        {
+            "occurred_at": row["occurred_at"],
+            "old": json.loads(row["old_payload"]) if row["old_payload"] is not None else None,
+            "new": json.loads(row["new_payload"]) if row["new_payload"] is not None else None,
+        }
+        for row in rows
+    ]
 
 
 def initialize_database():

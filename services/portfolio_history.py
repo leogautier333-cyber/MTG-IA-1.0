@@ -19,30 +19,71 @@ def _was_held(card, day):
     return not (end and end <= day)
 
 
-def value_series(collection, price_history):
+def value_series(collection, price_history, inventory_events=None):
     """Une ligne par jour de relevé : valeur de marché et capital investi des cartes détenues ce jour-là.
 
     Les cartes sans relevé de prix à une date donnée ne sont pas comptées dans la valeur."""
+    events = sorted(inventory_events or [], key=lambda event: _day(event["occurred_at"]))
     cards = [c for c in collection if c.get("scryfall_id")]
+    history_cards = cards + [
+        card for event in events for card in (event["old"], event["new"])
+        if card and card.get("scryfall_id")
+    ]
     days = sorted({
-        day for card in cards for day in (price_history.get(str(card["scryfall_id"])) or {})
+        day for card in history_cards for day in (price_history.get(str(card["scryfall_id"])) or {})
     })
     price_dates = {}
-    for card in cards:
+    for card in history_cards:
         card_id = str(card["scryfall_id"])
         key = "eur_foil" if card.get("foil") else "eur"
         variant = (card_id, key)
         if variant not in price_dates:
             history = price_history.get(card_id) or {}
             price_dates[variant] = sorted(day for day, point in history.items() if point.get(key))
+    start_day = _day(events[0]["occurred_at"]) if events else None
+    active = {}
+    event_index = 0
+
+    def apply_card(card, multiplier):
+        if not card or card.get("status", "FOR_SALE") != "FOR_SALE" or not card.get("scryfall_id"):
+            return
+        key = (str(card["scryfall_id"]), "eur_foil" if card.get("foil") else "eur")
+        quantity = max(1, int(card.get("quantity") or 1))
+        position = active.setdefault(key, {"quantity": 0, "cost": 0.0})
+        position["quantity"] += multiplier * quantity
+        if not card.get("purchase_price_unknown"):
+            position["cost"] += multiplier * float(card.get("purchase_price") or 0) * quantity
+
     series = []
     for day in days:
+        while event_index < len(events) and _day(events[event_index]["occurred_at"]) <= day:
+            event = events[event_index]
+            apply_card(event["old"], -1)
+            apply_card(event["new"], 1)
+            event_index += 1
+        if start_day and day >= start_day:
+            value = cost = 0.0
+            for (card_id, key), position in active.items():
+                if position["quantity"] <= 0:
+                    continue
+                cost += position["cost"]
+                history = price_history.get(card_id) or {}
+                known = price_dates.get((card_id, key))
+                if known is None:
+                    known = sorted(d for d, point in history.items() if point.get(key))
+                    price_dates[(card_id, key)] = known
+                index = bisect_right(known, day) - 1
+                if index >= 0:
+                    value += float(history[known[index]][key]) * position["quantity"]
+            series.append({"date": day, "value": round(value, 2), "cost": round(cost, 2)})
+            continue
         value = cost = 0.0
         for card in cards:
             if not _was_held(card, day):
                 continue
             quantity = max(1, int(card.get("quantity") or 1))
-            cost += float(card.get("purchase_price") or 0) * quantity
+            if not card.get("purchase_price_unknown"):
+                cost += float(card.get("purchase_price") or 0) * quantity
             key = "eur_foil" if card.get("foil") else "eur"
             card_id = str(card["scryfall_id"])
             history = price_history.get(card_id) or {}

@@ -2,7 +2,7 @@
 import json
 from datetime import datetime, timezone
 
-from database.storage import _database
+from database.storage import SCHEMA_VERSION, _database, _reset_inventory_history
 
 BACKUP_TABLE_COLUMNS = {
     "inventory": (
@@ -23,6 +23,7 @@ BACKUP_TABLE_COLUMNS = {
     "card_demand_snapshots": ("scryfall_id", "snapshot_date", "edhrec_rank"),
     "alerts": ("alert_id", "signal_type", "scryfall_id", "created_at", "payload"),
     "price_alerts": ("alert_id", "status", "created_at", "payload"),
+    "inventory_events": ("occurred_at", "old_payload", "new_payload"),
     "alert_evaluations": (
         "alert_id", "horizon_days", "target_date", "observed_date",
         "reference_price", "observed_price", "change_pct", "direction_correct",
@@ -31,7 +32,7 @@ BACKUP_TABLE_COLUMNS = {
     "metadata": ("key", "value"),
 }
 BACKUP_FORMAT_VERSION = 1
-OPTIONAL_TABLES = {"price_alerts"}
+OPTIONAL_TABLES = {"price_alerts", "inventory_events"}
 
 
 def _begin_snapshot(connection):
@@ -46,6 +47,7 @@ def _select_table(connection, table_name, columns, stream=False):
         "inventory": "entry_id",
         "watchlist": "entry_id",
         "price_snapshots": "snapshot_date, snapshot_id",
+        "inventory_events": "event_id",
     }.get(table_name)
     ordering = f" ORDER BY {order_by}" if order_by else ""
     query = f"SELECT {', '.join(columns)} FROM {table_name}{ordering}"
@@ -117,6 +119,7 @@ def restore_database_snapshot(snapshot):
         or not set(BACKUP_TABLE_COLUMNS) - OPTIONAL_TABLES <= set(tables) <= set(BACKUP_TABLE_COLUMNS)
     ):
         raise ValueError("La sauvegarde est incomplète ou contient un schéma inattendu.")
+    has_inventory_events = "inventory_events" in tables
     tables = {name: tables.get(name, []) for name in BACKUP_TABLE_COLUMNS}
     for table_name, columns in BACKUP_TABLE_COLUMNS.items():
         rows = tables[table_name]
@@ -125,12 +128,23 @@ def restore_database_snapshot(snapshot):
             for row in rows
         ):
             raise ValueError(f"Données invalides dans la table {table_name}.")
+    for row in tables["metadata"]:
+        if row["key"] == "schema_version":
+            try:
+                version = int(row["value"])
+            except (TypeError, ValueError):
+                raise ValueError("Version de schéma invalide dans la sauvegarde.") from None
+            if version < 0 or version > SCHEMA_VERSION:
+                raise ValueError("La sauvegarde nécessite une version plus récente de l'application.")
 
     delete_order = (
-        "alert_evaluations", "alerts", "price_alerts", "bulk_prints", "source_health",
+        "alert_evaluations", "alerts", "price_alerts", "inventory_events", "bulk_prints", "source_health",
         "card_demand_snapshots", "price_snapshots", "watchlist", "inventory", "metadata",
     )
     with _database() as connection:
+        if connection.dialect == "postgres":
+            connection.execute("LOCK TABLE inventory IN SHARE ROW EXCLUSIVE MODE")
+        connection.execute("UPDATE inventory_history_control SET enabled = 0 WHERE id = 1")
         for table_name in delete_order:
             connection.execute(f"DELETE FROM {table_name}")
         for table_name, columns in BACKUP_TABLE_COLUMNS.items():
@@ -143,4 +157,12 @@ def restore_database_snapshot(snapshot):
                 f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
                 [tuple(row[column] for column in columns) for row in rows],
             )
+        if not has_inventory_events:
+            _reset_inventory_history(connection)
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (str(SCHEMA_VERSION),),
+        )
+        connection.execute("UPDATE inventory_history_control SET enabled = 1 WHERE id = 1")
     return {table_name: len(rows) for table_name, rows in tables.items()}

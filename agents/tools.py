@@ -1,7 +1,7 @@
 import json
 
-import data_manager
 from database import storage
+from services import inventory
 from services.market_signals import calculate_reprint_risk
 from services.portfolio_analytics import simulate_sale
 from services.portfolio_analytics import analyze_portfolio
@@ -76,7 +76,7 @@ TOOL_SCHEMAS = [
 
 
 def query_collection(query="", include_sold=False):
-    full_collection = data_manager.get_collection()
+    full_collection = inventory.get_collection()
     normalized_query = str(query).casefold().strip()
     cards = [
         card for card in full_collection
@@ -106,7 +106,7 @@ def get_price_history(scryfall_id, foil=False, language="FR", condition="NM"):
 
 def tool_simulate_sale(scryfall_id, sale_price, shipping=0, cm_fee_pct=0.05):
     card = next(
-        (item for item in data_manager.get_collection() if item.get("scryfall_id") == scryfall_id),
+        (item for item in inventory.get_collection() if item.get("scryfall_id") == scryfall_id),
         None,
     )
     if not card:

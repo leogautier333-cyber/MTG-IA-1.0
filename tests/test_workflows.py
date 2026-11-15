@@ -15,6 +15,7 @@ from services.market_signals import (
 from services.portfolio_analytics import analyze_portfolio, simulate_sale, suggest_arbitrage
 from services.source_health import get_source_statuses
 from agents.tool_agent import ToolCallingAgent
+from agents.tools import query_collection, tool_simulate_sale
 
 
 class WorkflowTests(unittest.TestCase):
@@ -89,6 +90,16 @@ class WorkflowTests(unittest.TestCase):
         sale = simulate_sale({"quantity": 1, "purchase_price": 0}, 0.10)
         self.assertEqual(sale["fee_per_card"], 0.01)
         self.assertEqual(sale["net_per_card"], 0.09)
+
+    def test_agent_stock_tools_read_current_inventory(self):
+        card = {"scryfall_id": "agent-card", "name": "Agent Card", "set_code": "tst",
+                "status": "FOR_SALE", "purchase_price": 2, "selling_price": 5}
+        storage.save_collection([card])
+        self.assertEqual(query_collection("agent")["count"], 1)
+        self.assertEqual(tool_simulate_sale("agent-card", 10)["profit_total"], 7.5)
+        storage.save_collection([])
+        self.assertEqual(query_collection("agent")["count"], 0)
+        self.assertEqual(tool_simulate_sale("agent-card", 10)["error"], "Carte absente de la collection.")
 
     def test_reprint_history_and_buyout_proxy_require_evidence(self):
         old_print = {

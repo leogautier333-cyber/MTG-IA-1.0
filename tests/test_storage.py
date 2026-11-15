@@ -133,6 +133,34 @@ class StorageTests(unittest.TestCase):
             snapshot.restore_database_snapshot(backup)
         self.assertEqual(storage.get_collection(), [card])
 
+    def test_inventory_and_price_writes_reject_invalid_numbers_atomically(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2, "quantity": 1}
+        storage.save_collection([card])
+        events = storage.get_inventory_events()
+        for field, value in (("quantity", 0), ("quantity", 1.5),
+                             ("quantity", float("inf")), ("purchase_price", -1),
+                             ("selling_price", float("nan")), ("selling_price", float("inf")),
+                             ("target_price", -1), ("actual_sale_price", float("nan"))):
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ValueError):
+                    storage.save_collection([{**card, field: value}])
+                self.assertEqual(storage.get_collection(), [card])
+                self.assertEqual(storage.get_inventory_events(), events)
+        for quantity, price in ((0, 1), (1.5, 1), (1, -1), (1, float("nan"))):
+            with self.subTest(quantity=quantity, price=price):
+                with self.assertRaises(ValueError):
+                    storage.update_inventory_card(card, quantity, price, 2)
+        for price in (-1, float("nan"), float("inf")):
+            with self.subTest(price=price):
+                with self.assertRaises(ValueError):
+                    storage.mark_inventory_entry_sold(card, price, "2026-01-01")
+                with self.assertRaises(ValueError):
+                    storage.record_price_snapshot("card", price, observed_at="2026-01-01")
+        self.assertEqual(storage.get_collection(), [card])
+        self.assertEqual(storage.get_inventory_events(), events)
+        self.assertEqual(storage.get_price_history(), {})
+
     def test_missing_legacy_marker_does_not_erase_existing_stock(self):
         card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
                 "purchase_price": 1.0, "selling_price": 2.0}

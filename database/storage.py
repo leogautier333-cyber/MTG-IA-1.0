@@ -1,10 +1,12 @@
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import threading
 from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -545,7 +547,30 @@ def _database():
         connection.close()
 
 
+def validate_inventory_quantity(value):
+    try:
+        quantity = Decimal(str(value))
+    except InvalidOperation:
+        raise ValueError("La quantité doit être un entier positif.") from None
+    if not quantity.is_finite() or quantity != quantity.to_integral_value() or not 1 <= quantity <= 2147483647:
+        raise ValueError("La quantité doit être un entier positif compatible avec la base.")
+    return int(quantity)
+
+
+def validate_monetary_amount(value, field):
+    try:
+        amount = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{field} doit être un montant positif ou nul.") from None
+    if not math.isfinite(amount) or amount < 0:
+        raise ValueError(f"{field} doit être un montant fini, positif ou nul.")
+    return amount
+
+
 def _inventory_row(card):
+    for field in ("target_price", "actual_sale_price"):
+        if card.get(field) is not None:
+            validate_monetary_amount(card[field], field)
     return (
         str(card.get("scryfall_id", "")),
         int(bool(card.get("foil"))),
@@ -556,9 +581,9 @@ def _inventory_row(card):
         str(card.get("status", "FOR_SALE")),
         card.get("date_added"),
         card.get("date_sold"),
-        float(card.get("purchase_price") or 0),
-        float(card.get("selling_price") or 0),
-        int(card.get("quantity") or 1),
+        validate_monetary_amount(card.get("purchase_price") or 0, "Le prix d'achat"),
+        validate_monetary_amount(card.get("selling_price") or 0, "Le prix de vente"),
+        validate_inventory_quantity(card.get("quantity") if card.get("quantity") is not None else 1),
         _serialize(card),
     )
 
@@ -710,6 +735,11 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
     """Modifie uniquement la ligne identique à `original` ; False si elle a changé entre-temps.
 
     `target_price` : objectif de vente (0 ou None = aucun objectif)."""
+    quantity = validate_inventory_quantity(quantity)
+    purchase_price = validate_monetary_amount(purchase_price, "Le prix d'achat")
+    selling_price = validate_monetary_amount(selling_price, "Le prix de vente")
+    if target_price is not None:
+        target_price = validate_monetary_amount(target_price, "Le prix cible")
     identity = ("scryfall_id", "cardmarket_article_id", "foil", "language", "condition", "status", "date_added",
                 *_EDITABLE_FIELDS)
     with _database() as connection:
@@ -768,6 +798,7 @@ def append_inventory_decision(original, decision):
 
 def mark_inventory_sold(scryfall_id, sale_price, sold_at):
     """Marque la plus ancienne copie en vente comme vendue ; retourne False si aucune."""
+    sale_price = validate_monetary_amount(sale_price, "Le prix de vente")
     with _database() as connection:
         row = connection.execute(
             """SELECT entry_id, payload FROM inventory
@@ -789,6 +820,7 @@ def mark_inventory_sold(scryfall_id, sale_price, sold_at):
 
 def mark_inventory_entry_sold(original, sale_price, sold_at):
     """Marque la fiche sélectionnée comme vendue si elle est toujours inchangée."""
+    sale_price = validate_monetary_amount(sale_price, "Le prix de vente")
     with _database() as connection:
         rows = connection.execute(
             """SELECT entry_id, payload FROM inventory
@@ -857,6 +889,7 @@ def save_watchlist(watchlist):
 
 def _insert_snapshot(connection, scryfall_id, foil, language, condition, snapshot_day, observed_at, price,
                      preserve_existing=False):
+    price = validate_monetary_amount(price, "Le prix du relevé")
     conflict_action = (
         "DO NOTHING" if preserve_existing
         else "DO UPDATE SET observed_at = excluded.observed_at, price_eur = excluded.price_eur"
@@ -948,7 +981,8 @@ def _record_stock_snapshots(connection, records, observed_at):
                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(scryfall_id, foil, language, condition, snapshot_date)
                DO UPDATE SET observed_at = excluded.observed_at, price_eur = excluded.price_eur""",
-            [(str(card_id), int(bool(foil)), "FR", "NM", observed_at[:10], observed_at, price)
+            [(str(card_id), int(bool(foil)), "FR", "NM", observed_at[:10], observed_at,
+              validate_monetary_amount(price, "Le prix du relevé"))
              for card_id, foil, price in records],
         )
 

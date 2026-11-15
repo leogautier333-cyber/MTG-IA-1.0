@@ -117,6 +117,20 @@ class PostgresIntegrationTests(unittest.TestCase):
         expected = {key: self.storage.get_variant_price_history(*key) for key in variants}
         self.assertEqual(self.storage.get_variant_price_histories_batch(variants), expected)
 
+    def test_invalid_stock_numbers_do_not_change_stock_or_events(self):
+        card = {"scryfall_id": "test", "name": "Test", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        self.storage.save_collection([card])
+        events = self.storage.get_inventory_events()
+        with self.assertRaises(ValueError):
+            self.storage.save_collection([{**card, "quantity": 0}])
+        with self.assertRaises(ValueError):
+            self.storage.update_inventory_card(card, 1, float("nan"), 2)
+        with self.assertRaises(ValueError):
+            self.storage.record_price_snapshot("test", -1, observed_at="2026-01-01")
+        self.assertEqual(self.storage.get_collection(), [card])
+        self.assertEqual(self.storage.get_inventory_events(), events)
+
     def test_stream_backup_restores_multiple_batches_and_history(self):
         from database.backup import create_backup, restore_backup
         from cryptography.fernet import Fernet

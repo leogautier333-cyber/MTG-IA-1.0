@@ -38,6 +38,7 @@ La courbe du portefeuille reconstitue les quantités et coûts en fin de journé
 Le calcul de marge utilise un arrondi décimal « moitié supérieure » au centime ; une suggestion de prix est arrondie au centime supérieur afin de ne pas passer sous le seuil demandé. Le stockage historique reste en nombres flottants.
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
+Les écritures de stock, ventes et relevés contrôlent aussi les quantités et montants à la frontière SQL : les quantités doivent être entières et strictement positives ; les prix doivent être finis et non négatifs. Ces contrôles applicatifs ne remplacent pas des contraintes SQL pour les écritures effectuées directement hors de l'application.
 
 ## Lancer l'application et le suivi
 

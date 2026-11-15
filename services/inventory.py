@@ -44,9 +44,9 @@ def _new_card(**kwargs):
         "language": kwargs.get("language", "FR"),
         "condition": kwargs.get("condition", "NM"),
         "foil": bool(kwargs.get("foil", False)),
-        "quantity": max(1, int(kwargs.get("quantity", 1))),
-        "purchase_price": float(kwargs.get("purchase_price", 0) or 0),
-        "selling_price": float(kwargs.get("selling_price", 0) or 0),
+        "quantity": storage.validate_inventory_quantity(kwargs.get("quantity", 1)),
+        "purchase_price": storage.validate_monetary_amount(kwargs.get("purchase_price", 0) or 0, "Le prix d'achat"),
+        "selling_price": storage.validate_monetary_amount(kwargs.get("selling_price", 0) or 0, "Le prix de vente"),
         "liquidity_rating": kwargs.get("liquidity_rating", "MEDIUM"),
         "status": "FOR_SALE",
         "date_added": _now(),
@@ -88,8 +88,7 @@ def mark_selected_card_as_sold(card, actual_sale_price):
 def update_card(original, quantity, purchase_price, selling_price, target_price=None):
     """Édition rapide d'une seule carte ; False si le stock a changé entre-temps."""
     return storage.update_inventory_card(
-        original, max(1, int(quantity)), float(purchase_price), float(selling_price),
-        float(target_price or 0) or None,
+        original, quantity, purchase_price, selling_price, target_price,
     )
 
 

@@ -117,6 +117,24 @@ class PostgresIntegrationTests(unittest.TestCase):
         expected = {key: self.storage.get_variant_price_history(*key) for key in variants}
         self.assertEqual(self.storage.get_variant_price_histories_batch(variants), expected)
 
+    def test_stream_backup_restores_multiple_batches_and_history(self):
+        from database.backup import create_backup, restore_backup
+        from cryptography.fernet import Fernet
+
+        cards = [{"scryfall_id": f"card-{index}", "name": "Card", "set_code": "tst",
+                  "purchase_price": 1, "selling_price": 2} for index in range(501)]
+        self.storage.save_collection(cards)
+        events = self.storage.get_inventory_events()
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
+            path = Path(directory) / "backup.enc"
+            create_backup(path)
+            self.storage.save_collection([])
+            counts = restore_backup(path)
+        self.assertEqual(counts["inventory"], len(cards))
+        self.assertEqual(self.storage.get_collection(), cards)
+        self.assertEqual(self.storage.get_inventory_events(), events)
+
     def test_bulk_batches_and_incomplete_stream_rolls_back(self):
         from database import market_data
 

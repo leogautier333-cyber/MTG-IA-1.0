@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import os
 import sqlite3
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -352,10 +353,59 @@ class StorageTests(unittest.TestCase):
         encrypted[-17] ^= 1
         with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
             restore_backup_bytes(bytes(encrypted))
+        path.write_bytes(encrypted)
+        with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+            restore_backup(path)
         self.assertEqual(storage.get_collection(), [card])
         storage.save_collection([])
         restore_backup_bytes(legacy)
         self.assertEqual(storage.get_collection(), [card])
+
+    def test_stream_restore_batches_rows_and_preserves_history(self):
+        cards = [{"scryfall_id": f"card-{index}", "name": "Card", "set_code": "tst",
+                  "purchase_price": 1.0, "selling_price": 2.0} for index in range(1201)]
+        storage.save_collection(cards)
+        events = storage.get_inventory_events()
+        path = Path(self.temporary_directory.name) / "large.enc"
+        create_backup(path)
+        storage.save_collection([])
+        sizes = []
+        original_insert = snapshot._insert_rows
+
+        def capture_insert(connection, table_name, rows):
+            if table_name == "inventory":
+                sizes.append(len(rows))
+            return original_insert(connection, table_name, rows)
+
+        with patch.object(snapshot, "_insert_rows", side_effect=capture_insert):
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("not streaming")):
+                counts = restore_backup(path)
+        self.assertEqual(counts["inventory"], len(cards))
+        self.assertEqual(storage.get_collection(), cards)
+        self.assertEqual(storage.get_inventory_events(), events)
+        self.assertEqual(sizes, [500, 500, 201])
+
+    def test_stream_restore_invalid_schema_and_invalid_json_roll_back(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        events = storage.get_inventory_events()
+        data = snapshot.export_database_snapshot()
+        next(row for row in data["tables"]["metadata"] if row["key"] == "schema_version")["value"] = "999"
+        path = Path(self.temporary_directory.name) / "future.enc"
+        with patch.object(snapshot, "iter_database_snapshot_json",
+                          return_value=iter([json.dumps(data).encode("utf-8")])):
+            create_backup(path)
+        with self.assertRaisesRegex(ValueError, "version plus récente"):
+            restore_backup(path)
+        self.assertEqual(storage.get_collection(), [card])
+        self.assertEqual(storage.get_inventory_events(), events)
+        with patch.object(snapshot, "iter_database_snapshot_json", return_value=iter([b'{"tables":{'])):
+            create_backup(path)
+        with self.assertRaises(BackupEncryptionError):
+            restore_backup(path)
+        self.assertEqual(storage.get_collection(), [card])
+        self.assertEqual(storage.get_inventory_events(), events)
 
     def test_failed_stream_does_not_replace_existing_backup(self):
         path = Path(self.temporary_directory.name) / "existing.enc"

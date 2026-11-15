@@ -1,12 +1,14 @@
 import argparse
 import base64
 import gzip
+import io
 import json
 import os
 import tempfile
 import zlib
 from pathlib import Path
 
+import ijson
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -119,10 +121,61 @@ def create_backup(destination):
     return destination
 
 
+class _DecryptedReader(io.RawIOBase):
+    def __init__(self, source):
+        super().__init__()
+        self.source = source
+        prefix_size = len(STREAM_HEADER) + NONCE_SIZE
+        source.seek(0, os.SEEK_END)
+        size = source.tell()
+        if size < prefix_size + TAG_SIZE:
+            raise BackupEncryptionError("Backup is incomplete.")
+        source.seek(len(STREAM_HEADER))
+        nonce = source.read(NONCE_SIZE)
+        source.seek(-TAG_SIZE, os.SEEK_END)
+        tag = source.read(TAG_SIZE)
+        source.seek(prefix_size)
+        self.remaining = size - prefix_size - TAG_SIZE
+        self.decryptor = Cipher(algorithms.AES(_stream_key()), modes.GCM(nonce, tag)).decryptor()
+        self.decryptor.authenticate_additional_data(STREAM_HEADER)
+        self.finalized = False
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self.remaining:
+            encrypted = self.source.read(min(len(buffer), self.remaining))
+            if not encrypted:
+                raise BackupEncryptionError("Backup is incomplete.")
+            self.remaining -= len(encrypted)
+            plaintext = self.decryptor.update(encrypted)
+            buffer[:len(plaintext)] = plaintext
+            return len(plaintext)
+        if not self.finalized:
+            self.decryptor.finalize()
+            self.finalized = True
+        return 0
+
+
 def restore_backup(source, allow_plaintext_legacy=False):
-    return restore_backup_bytes(
-        Path(source).read_bytes(), allow_plaintext_legacy=allow_plaintext_legacy
-    )
+    with Path(source).open("rb") as archive:
+        if archive.read(len(STREAM_HEADER)) != STREAM_HEADER:
+            archive.seek(0)
+            return restore_backup_bytes(archive.read(), allow_plaintext_legacy=allow_plaintext_legacy)
+        try:
+            with io.BufferedReader(_DecryptedReader(archive)) as verified:
+                while verified.read(1024 * 1024):
+                    pass
+            with io.BufferedReader(_DecryptedReader(archive)) as decrypted:
+                with gzip.GzipFile(fileobj=decrypted, mode="rb") as content:
+                    return snapshot.restore_database_snapshot_stream(content)
+        except InvalidTag:
+            raise BackupEncryptionError(
+                "Backup authentication failed; the key is incorrect or the archive was modified."
+            ) from None
+        except (OSError, EOFError, UnicodeDecodeError, ijson.JSONError):
+            raise BackupEncryptionError("Backup is not a valid compressed database snapshot.") from None
 
 
 def main():

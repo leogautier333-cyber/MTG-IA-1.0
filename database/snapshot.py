@@ -2,6 +2,8 @@
 import json
 from datetime import datetime, timezone
 
+import ijson
+
 from database.storage import SCHEMA_VERSION, _database, _reset_inventory_history
 
 BACKUP_TABLE_COLUMNS = {
@@ -33,6 +35,50 @@ BACKUP_TABLE_COLUMNS = {
 }
 BACKUP_FORMAT_VERSION = 1
 OPTIONAL_TABLES = {"price_alerts", "inventory_events"}
+DELETE_ORDER = (
+    "alert_evaluations", "alerts", "price_alerts", "inventory_events", "bulk_prints", "source_health",
+    "card_demand_snapshots", "price_snapshots", "watchlist", "inventory", "metadata",
+)
+
+
+def _validate_schema_version(row):
+    if row["key"] == "schema_version":
+        try:
+            version = int(row["value"])
+        except (TypeError, ValueError):
+            raise ValueError("Version de schéma invalide dans la sauvegarde.") from None
+        if version < 0 or version > SCHEMA_VERSION:
+            raise ValueError("La sauvegarde nécessite une version plus récente de l'application.")
+
+
+def _begin_restore(connection):
+    if connection.dialect == "postgres":
+        connection.execute("LOCK TABLE inventory IN SHARE ROW EXCLUSIVE MODE")
+    connection.execute("UPDATE inventory_history_control SET enabled = 0 WHERE id = 1")
+    for table_name in DELETE_ORDER:
+        connection.execute(f"DELETE FROM {table_name}")
+
+
+def _insert_rows(connection, table_name, rows):
+    if rows:
+        columns = BACKUP_TABLE_COLUMNS[table_name]
+        placeholders = ", ".join("?" for _ in columns)
+        column_sql = ", ".join(columns)
+        connection.executemany(
+            f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            [tuple(row[column] for column in columns) for row in rows],
+        )
+
+
+def _finish_restore(connection, has_inventory_events):
+    if not has_inventory_events:
+        _reset_inventory_history(connection)
+    connection.execute(
+        """INSERT INTO metadata(key, value) VALUES ('schema_version', ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+        (str(SCHEMA_VERSION),),
+    )
+    connection.execute("UPDATE inventory_history_control SET enabled = 1 WHERE id = 1")
 
 
 def _begin_snapshot(connection):
@@ -129,40 +175,89 @@ def restore_database_snapshot(snapshot):
         ):
             raise ValueError(f"Données invalides dans la table {table_name}.")
     for row in tables["metadata"]:
-        if row["key"] == "schema_version":
-            try:
-                version = int(row["value"])
-            except (TypeError, ValueError):
-                raise ValueError("Version de schéma invalide dans la sauvegarde.") from None
-            if version < 0 or version > SCHEMA_VERSION:
-                raise ValueError("La sauvegarde nécessite une version plus récente de l'application.")
+        _validate_schema_version(row)
 
-    delete_order = (
-        "alert_evaluations", "alerts", "price_alerts", "inventory_events", "bulk_prints", "source_health",
-        "card_demand_snapshots", "price_snapshots", "watchlist", "inventory", "metadata",
-    )
     with _database() as connection:
-        if connection.dialect == "postgres":
-            connection.execute("LOCK TABLE inventory IN SHARE ROW EXCLUSIVE MODE")
-        connection.execute("UPDATE inventory_history_control SET enabled = 0 WHERE id = 1")
-        for table_name in delete_order:
-            connection.execute(f"DELETE FROM {table_name}")
-        for table_name, columns in BACKUP_TABLE_COLUMNS.items():
-            rows = tables[table_name]
-            if not rows:
-                continue
-            placeholders = ", ".join("?" for _ in columns)
-            column_sql = ", ".join(columns)
-            connection.executemany(
-                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
-                [tuple(row[column] for column in columns) for row in rows],
-            )
-        if not has_inventory_events:
-            _reset_inventory_history(connection)
-        connection.execute(
-            """INSERT INTO metadata(key, value) VALUES ('schema_version', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (str(SCHEMA_VERSION),),
-        )
-        connection.execute("UPDATE inventory_history_control SET enabled = 1 WHERE id = 1")
+        _begin_restore(connection)
+        for table_name in BACKUP_TABLE_COLUMNS:
+            _insert_rows(connection, table_name, tables[table_name])
+        _finish_restore(connection, has_inventory_events)
     return {table_name: len(rows) for table_name, rows in tables.items()}
+
+
+def restore_database_snapshot_stream(source, batch_size=500):
+    """Restaure l'export séquentiel en mémoire bornée, dans une seule transaction."""
+    if batch_size < 1:
+        raise ValueError("La taille du lot doit être positive.")
+    counts = dict.fromkeys(BACKUP_TABLE_COLUMNS, 0)
+    seen_tables = set()
+    headers = {}
+    table_order = list(BACKUP_TABLE_COLUMNS)
+    last_table_index = -1
+    table_name = None
+    rows = []
+    builder = None
+    depth = 0
+    root_started = tables_started = False
+
+    with _database() as connection:
+        _begin_restore(connection)
+        for prefix, event, value in ijson.parse(source, use_float=True):
+            if builder is not None:
+                builder.event(event, value)
+                if event in ("start_map", "start_array"):
+                    depth += 1
+                elif event in ("end_map", "end_array"):
+                    depth -= 1
+                if depth == 0:
+                    row = builder.value
+                    builder = None
+                    if not set(BACKUP_TABLE_COLUMNS[table_name]).issubset(row):
+                        raise ValueError(f"Données invalides dans la table {table_name}.")
+                    if table_name == "metadata":
+                        _validate_schema_version(row)
+                    rows.append(row)
+                    counts[table_name] += 1
+                    if len(rows) >= batch_size:
+                        _insert_rows(connection, table_name, rows)
+                        rows.clear()
+                continue
+            if prefix == "" and event == "start_map":
+                root_started = True
+            elif prefix in ("format", "format_version") and event in ("string", "number"):
+                if prefix in headers:
+                    raise ValueError("En-tête de sauvegarde en double.")
+                headers[prefix] = value
+            elif prefix == "tables" and event == "start_map":
+                if tables_started:
+                    raise ValueError("Tables de sauvegarde en double.")
+                tables_started = True
+            elif prefix == "tables" and event == "map_key":
+                if value not in BACKUP_TABLE_COLUMNS or value in seen_tables:
+                    raise ValueError("La sauvegarde contient une table inattendue ou en double.")
+                index = table_order.index(value)
+                if index <= last_table_index:
+                    raise ValueError("Ordre des tables de sauvegarde invalide.")
+                last_table_index = index
+                table_name = value
+                seen_tables.add(value)
+            elif table_name and prefix == f"tables.{table_name}" and event == "start_array":
+                pass
+            elif table_name and prefix == f"tables.{table_name}.item" and event == "start_map":
+                builder = ijson.common.ObjectBuilder()
+                builder.event(event, value)
+                depth = 1
+            elif table_name and prefix == f"tables.{table_name}" and event == "end_array":
+                _insert_rows(connection, table_name, rows)
+                rows.clear()
+                table_name = None
+            elif table_name and prefix.startswith(f"tables.{table_name}"):
+                raise ValueError(f"Données invalides dans la table {table_name}.")
+
+        if (not root_started or not tables_started or table_name is not None
+                or not set(BACKUP_TABLE_COLUMNS) - OPTIONAL_TABLES <= seen_tables
+                or headers.get("format") != "magic-trading-sql-backup"
+                or headers.get("format_version") != BACKUP_FORMAT_VERSION):
+            raise ValueError("Format ou contenu de sauvegarde invalide.")
+        _finish_restore(connection, "inventory_events" in seen_tables)
+    return counts

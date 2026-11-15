@@ -94,6 +94,8 @@ class StorageTests(unittest.TestCase):
         with storage._database() as connection:
             for action in ("insert", "update", "delete"):
                 connection.execute(f"DROP TRIGGER inventory_history_{action}")
+            for action in ("insert", "update"):
+                connection.execute(f"DROP TRIGGER inventory_validation_{action}")
             connection.execute("DROP TABLE inventory_events")
             connection.execute("DROP TABLE inventory_history_control")
             connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
@@ -102,7 +104,21 @@ class StorageTests(unittest.TestCase):
         events = storage.get_inventory_events()
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1]["new"], card)
-        self.assertEqual(storage.get_metadata("schema_version"), "2")
+        self.assertEqual(storage.get_metadata("schema_version"), str(storage.SCHEMA_VERSION))
+
+    def test_sql_triggers_reject_invalid_direct_inventory_writes(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        storage.save_collection([card])
+        events = storage.get_inventory_events()
+        for field, value in (("quantity", 0), ("quantity", 1.5),
+                             ("purchase_price", -1), ("selling_price", float("inf"))):
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    with storage._database() as connection:
+                        connection.execute(f"UPDATE inventory SET {field} = ?", (value,))
+        self.assertEqual(storage.get_collection(), [card])
+        self.assertEqual(storage.get_inventory_events(), events)
 
     def test_failed_inventory_write_and_restore_roll_back_events(self):
         card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",

@@ -16,7 +16,7 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 REQUIRED_TABLES = frozenset({
     "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
@@ -330,6 +330,45 @@ def _migrate_schema(connection):
             """INSERT INTO metadata(key, value) VALUES ('schema_version', '2')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
         )
+    if version < 3:
+        _create_inventory_validation(connection)
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', '3')
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+
+
+def _create_inventory_validation(connection):
+    if connection.dialect == "postgres":
+        connection.execute("""
+            CREATE FUNCTION validate_inventory_values() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.quantity < 1 OR NEW.purchase_price < 0 OR NEW.selling_price < 0
+                   OR NEW.purchase_price >= 'Infinity'::real
+                   OR NEW.selling_price >= 'Infinity'::real THEN
+                    RAISE EXCEPTION 'Invalid inventory quantity or price';
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+        """)
+        connection.execute("""CREATE TRIGGER inventory_validation_trigger
+            BEFORE INSERT OR UPDATE ON inventory
+            FOR EACH ROW EXECUTE FUNCTION validate_inventory_values()""")
+    else:
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(f"""CREATE TRIGGER inventory_validation_{action.lower()}
+                BEFORE {action} ON inventory
+                WHEN typeof(NEW.quantity) != 'integer' OR NEW.quantity < 1
+                  OR NEW.quantity > 2147483647
+                  OR typeof(NEW.purchase_price) NOT IN ('integer', 'real')
+                  OR typeof(NEW.selling_price) NOT IN ('integer', 'real')
+                  OR NEW.purchase_price < 0 OR NEW.selling_price < 0
+                  OR NEW.purchase_price > 3.4028234663852886e38
+                  OR NEW.selling_price > 3.4028234663852886e38
+                BEGIN
+                    SELECT RAISE(ABORT, 'Invalid inventory quantity or price');
+                END""")
 
 
 def _create_inventory_history(connection):

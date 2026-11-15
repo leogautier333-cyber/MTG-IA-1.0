@@ -100,6 +100,8 @@ class PostgresIntegrationTests(unittest.TestCase):
         with self.storage._database() as connection:
             connection.execute("DROP TRIGGER inventory_history_trigger ON inventory")
             connection.execute("DROP FUNCTION record_inventory_event()")
+            connection.execute("DROP TRIGGER inventory_validation_trigger ON inventory")
+            connection.execute("DROP FUNCTION validate_inventory_values()")
             connection.execute("DROP TABLE inventory_events")
             connection.execute("DROP TABLE inventory_history_control")
             connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
@@ -108,6 +110,23 @@ class PostgresIntegrationTests(unittest.TestCase):
         events = self.storage.get_inventory_events()
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1]["new"], card)
+
+    def test_sql_validation_trigger_rejects_direct_invalid_updates(self):
+        from psycopg.errors import RaiseException
+
+        card = {"scryfall_id": "test", "name": "Test", "set_code": "tst",
+                "purchase_price": 1, "selling_price": 2}
+        self.storage.save_collection([card])
+        events = self.storage.get_inventory_events()
+        for column, value in (("quantity", 0), ("purchase_price", -1),
+                              ("selling_price", float("inf")), ("selling_price", float("nan"))):
+            with self.subTest(column=column, value=value):
+                with self.assertRaises(RaiseException) as raised:
+                    with self.storage._database() as connection:
+                        connection.execute(f"UPDATE inventory SET {column} = ?", (value,))
+                self.assertEqual(getattr(raised.exception, "sqlstate", None), "P0001")
+        self.assertEqual(self.storage.get_collection(), [card])
+        self.assertEqual(self.storage.get_inventory_events(), events)
 
     def test_batch_variant_history_matches_individual_queries(self):
         self.storage.record_price_snapshot(

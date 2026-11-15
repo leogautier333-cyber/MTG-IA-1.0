@@ -1,12 +1,13 @@
 import tempfile
 import unittest
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
-from database import market_data, storage
+from database import market_data, snapshot, storage
 from database.backup import (
     BackupEncryptionError,
     create_backup,
@@ -78,6 +79,32 @@ class StorageTests(unittest.TestCase):
                 with storage._database() as connection:
                     count = connection.execute("SELECT COUNT(*) AS n FROM bulk_prints").fetchone()["n"]
                 self.assertEqual(count, 4)
+
+    def test_backup_export_uses_consistent_sqlite_snapshot(self):
+        card = {"scryfall_id": "first", "name": "First", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        original_database = storage._database
+
+        @contextmanager
+        def intercepted_database():
+            with original_database() as connection:
+                class InterceptedConnection:
+                    dialect = connection.dialect
+
+                    def execute(self, query, parameters=()):
+                        cursor = connection.execute(query, parameters)
+                        if query.startswith("SELECT ") and " FROM inventory" in query:
+                            storage.save_watchlist([{"scryfall_id": "after-snapshot"}])
+                        return cursor
+
+                yield InterceptedConnection()
+
+        with patch.object(snapshot, "_database", intercepted_database):
+            exported = snapshot.export_database_snapshot()
+        self.assertEqual(len(exported["tables"]["inventory"]), 1)
+        self.assertEqual(exported["tables"]["watchlist"], [])
+        self.assertEqual(len(storage.get_watchlist()), 1)
 
     def test_legacy_json_is_migrated_and_daily_prices_are_upserted(self):
         legacy_data = {

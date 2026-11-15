@@ -3,7 +3,9 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -22,6 +24,36 @@ PRICE_ALERT = "PRICE"
 COLOR_UP, COLOR_DOWN, COLOR_INFO = 3066993, 15158332, 16760576
 DISCORD_SUMMARY_LIMIT = 3800
 DISCORD_ATTACHMENT_LIMIT = 8 * 1024 * 1024
+ANALYSIS_LOCK_ID = 734526419
+
+
+@contextmanager
+def _analysis_lock():
+    if storage.get_database_backend() == "postgres":
+        connection = storage._connect()
+        try:
+            acquired = connection.execute(
+                "SELECT pg_try_advisory_xact_lock(?) AS acquired", (ANALYSIS_LOCK_ID,)
+            ).fetchone()["acquired"]
+            if not acquired:
+                raise RuntimeError("Une analyse du stock est déjà en cours ; réessaie plus tard.")
+            yield
+        finally:
+            connection.close()
+    else:
+        lock_path = storage.DATABASE_PATH.with_name(storage.DATABASE_PATH.name + ".analysis-lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(lock_path, timeout=0)
+        try:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as error:
+                if getattr(error, "sqlite_errorcode", None) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise RuntimeError("Une analyse du stock est déjà en cours ; réessaie plus tard.") from error
+                raise
+            yield
+        finally:
+            connection.close()
 
 
 def _price_trend(previous, current):
@@ -380,6 +412,11 @@ def scan_stock_events(session=requests):
 
 
 def analyze_stock_prices(session=requests, events=()):
+    with _analysis_lock():
+        return _analyze_stock_prices(session=session, events=events)
+
+
+def _analyze_stock_prices(session=requests, events=()):
     started = time.perf_counter()
     collection = inventory.get_collection()
     untracked = [

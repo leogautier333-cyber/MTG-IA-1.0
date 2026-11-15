@@ -35,6 +35,10 @@ OPTIONAL_TABLES = {"price_alerts"}
 
 def export_database_snapshot():
     with _database() as connection:
+        if connection.dialect == "postgres":
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        else:
+            connection.execute("BEGIN")
         tables = {}
         for table_name, columns in BACKUP_TABLE_COLUMNS.items():
             order_by = {

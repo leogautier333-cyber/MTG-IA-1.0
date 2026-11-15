@@ -59,6 +59,27 @@ class PhaseOneTests(unittest.TestCase):
         post.assert_called_once()
         self.assertEqual(inventory.get_price_history(), {})
 
+    def test_analysis_lock_prevents_overlapping_sqlite_analyses_and_releases(self):
+        with phase_one_monitor._analysis_lock():
+            with self.assertRaisesRegex(RuntimeError, "déjà en cours"):
+                phase_one_monitor.analyze_stock_prices()
+        result = phase_one_monitor.analyze_stock_prices()
+        self.assertEqual(result["analyzed"], 0)
+
+    def test_postgres_analysis_lock_is_transaction_scoped_and_closed(self):
+        connection = Mock()
+        connection.execute.return_value.fetchone.return_value = {"acquired": False}
+        with patch.object(storage, "get_database_backend", return_value="postgres"), \
+             patch.object(storage, "_connect", return_value=connection):
+            with self.assertRaisesRegex(RuntimeError, "déjà en cours"):
+                with phase_one_monitor._analysis_lock():
+                    self.fail("Lock was not acquired")
+        connection.execute.assert_called_once_with(
+            "SELECT pg_try_advisory_xact_lock(?) AS acquired",
+            (phase_one_monitor.ANALYSIS_LOCK_ID,),
+        )
+        connection.close.assert_called_once()
+
     def test_sold_cards_are_never_requested_or_snapshotted(self):
         inventory.save_collection([_card("sold-card", "SOLD")])
         with patch.object(phase_one_monitor.scryfall, "get_cards_batch") as get_cards:

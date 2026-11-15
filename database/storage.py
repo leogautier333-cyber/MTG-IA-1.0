@@ -1045,7 +1045,7 @@ def get_price_points(scryfall_id, foil=False, language="FR", condition="NM"):
     return [(row["snapshot_date"], row["price_eur"]) for row in rows]
 
 
-def get_price_points_batch(variants):
+def get_variant_price_histories_batch(variants):
     keys = list(dict.fromkeys(
         (str(card_id), bool(foil), str(language), str(condition))
         for card_id, foil, language, condition in variants
@@ -1059,7 +1059,7 @@ def get_price_points_batch(variants):
             chunk = ids[start:start + 500]
             placeholders = ", ".join("?" for _ in chunk)
             rows = connection.execute(
-                f"""SELECT scryfall_id, foil, language, condition, snapshot_date, price_eur
+                f"""SELECT scryfall_id, foil, language, condition, snapshot_date, observed_at, price_eur
                     FROM price_snapshots WHERE scryfall_id IN ({placeholders})
                     ORDER BY snapshot_date""",
                 chunk,
@@ -1067,8 +1067,20 @@ def get_price_points_batch(variants):
             for row in rows:
                 key = (row["scryfall_id"], bool(row["foil"]), row["language"], row["condition"])
                 if key in points:
-                    points[key].append((row["snapshot_date"], row["price_eur"]))
+                    points[key].append({
+                        "snapshot_date": row["snapshot_date"],
+                        "observed_at": row["observed_at"],
+                        "price_eur": row["price_eur"],
+                    })
     return points
+
+
+def get_price_points_batch(variants):
+    histories = get_variant_price_histories_batch(variants)
+    return {
+        key: [(row["snapshot_date"], row["price_eur"]) for row in rows]
+        for key, rows in histories.items()
+    }
 
 
 def get_alerts_for_evaluation():

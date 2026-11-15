@@ -109,6 +109,14 @@ class PostgresIntegrationTests(unittest.TestCase):
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1]["new"], card)
 
+    def test_batch_variant_history_matches_individual_queries(self):
+        self.storage.record_price_snapshot(
+            "test", 4, foil=True, language="EN", observed_at="2026-01-01T10:00:00+00:00"
+        )
+        variants = [("test", True, "EN", "NM"), ("missing", False, "FR", "NM")]
+        expected = {key: self.storage.get_variant_price_history(*key) for key in variants}
+        self.assertEqual(self.storage.get_variant_price_histories_batch(variants), expected)
+
     def test_analysis_lock_is_shared_between_connections(self):
         from services.phase_one_monitor import _analysis_lock
         with _analysis_lock():

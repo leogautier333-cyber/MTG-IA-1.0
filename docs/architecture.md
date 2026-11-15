@@ -21,6 +21,7 @@ Chaque analyse enregistre un relevé par jour et par variante (le dernier relev�
 
 L'analyse regroupe les lectures et écritures SQL par lots : les relevés, rangs et alertes sont enregistrés dans une même transaction. Une erreur pendant cette transaction annule ces écritures. Les journaux du workflow indiquent les durées de veille, préparation/Scryfall, calcul SQL et livraison Discord, sans afficher de secrets.
 Les historiques du rapport hebdomadaire et de l'analyse du portefeuille sont aussi chargés par lots. Les invalidations de cache visent les données applicatives concernées plutôt que toutes les données Streamlit.
+Les historiques de la watchlist sont eux aussi lus par lots plutôt que par connexion SQL séparée pour chaque variante.
 La synchronisation Cardmarket indexe les fiches par article et variante au lieu de reparcourir tout le stock pour chaque ligne.
 La préparation mémorise aussi les réponses Scryfall par produit pendant une heure dans le processus Streamlit (10 000 produits au maximum) ; les erreurs ne sont pas mémorisées. Au-delà ou après redémarrage, les produits sont à nouveau demandés.
 

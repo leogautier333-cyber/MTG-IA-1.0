@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta, timezone
 
-import data_manager
+from database import storage
 
 
 DEFAULT_MAX_AGE_HOURS = {
@@ -13,7 +13,7 @@ DEFAULT_MAX_AGE_HOURS = {
 
 def get_source_statuses(now=None):
     now = now or datetime.now(timezone.utc)
-    recorded = data_manager.storage.get_source_health()
+    recorded = storage.get_source_health()
     statuses = {}
     for source, max_age in DEFAULT_MAX_AGE_HOURS.items():
         check = recorded.get(source)

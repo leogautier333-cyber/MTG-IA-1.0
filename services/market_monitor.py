@@ -3,6 +3,7 @@ import hashlib
 
 import scryfall
 import data_manager
+from database import storage
 from modules.market_analyzer import detect_watchlist_drops
 
 
@@ -15,13 +16,9 @@ def _variant_key(card):
 
 def get_watchlist_observations(watchlist=None):
     watchlist = watchlist if watchlist is not None else data_manager.get_watchlist()
-    return {
-        _variant_key(card): data_manager.storage.get_variant_price_history(
-            card.get("scryfall_id"), card.get("foil", False),
-            card.get("language", "FR"), card.get("condition", "NM"),
-        )
-        for card in watchlist if card.get("scryfall_id")
-    }
+    return storage.get_variant_price_histories_batch(
+        _variant_key(card) for card in watchlist if card.get("scryfall_id")
+    )
 
 
 def refresh_watchlist_prices(watchlist, collection):

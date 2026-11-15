@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from database import market_data, storage
-from services import market_signals, stock_advisor
+from services import market_monitor, market_signals, stock_advisor
 
 
 class BatchReadTests(unittest.TestCase):
@@ -60,6 +60,23 @@ class BatchReadTests(unittest.TestCase):
             self.assertEqual(storage.get_price_points_batch([]), {})
             self.assertEqual(market_data.get_edhrec_histories([]), {})
         connect.assert_not_called()
+
+    def test_watchlist_histories_are_read_in_one_connection(self):
+        storage.record_price_snapshot("a", 10, observed_at="2026-10-10T10:00:00+00:00")
+        storage.record_price_snapshot("a", 8, observed_at="2026-10-11T10:00:00+00:00")
+        storage.record_price_snapshot("a", 20, foil=True, language="EN",
+                                      observed_at="2026-10-11T10:00:00+00:00")
+        watchlist = [
+            {"scryfall_id": "a"},
+            {"scryfall_id": "a", "foil": True, "language": "EN"},
+            {"scryfall_id": "missing"},
+        ]
+        keys = [market_monitor._variant_key(card) for card in watchlist]
+        expected = {key: storage.get_variant_price_history(*key) for key in keys}
+        with patch.object(storage, "_connect", wraps=storage._connect) as connect:
+            histories = market_monitor.get_watchlist_observations(watchlist)
+        self.assertEqual(histories, expected)
+        self.assertEqual(connect.call_count, 1)
 
     def test_large_batch_is_chunked_and_preserves_input_keys(self):
         ids = [f"card-{index}" for index in range(501)]

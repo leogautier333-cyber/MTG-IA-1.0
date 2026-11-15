@@ -153,6 +153,55 @@ class BatchReadTests(unittest.TestCase):
 
 
 class DiscordFragmentTests(unittest.TestCase):
+    def test_stock_empty_filter_edit_and_sale(self):
+        script = """
+from streamlit.testing.v1 import AppTest
+from services import inventory
+import data_manager
+
+app = AppTest.from_file("app.py", default_timeout=60).run()
+assert not app.exception
+assert any("Aucune carte enregistrée" in item.value for item in app.info)
+inventory.add_cards_to_collection([
+    dict(scryfall_id=card_id, name=name, set_code="tst", purchase_price=2,
+         selling_price=5, image_url="https://example.invalid/x",
+         mana_cost="{1}", type_line="Creature", oracle_text="Test")
+    for card_id, name in (("a", "Alpha"), ("b", "Beta"))
+])
+data_manager.clear_cache()
+app.run()
+assert not app.exception
+assert any(m.label == "Cartes en stock" and m.value == "2 exemplaires" for m in app.metric)
+next(w for w in app.text_input if w.label == "Rechercher").set_value("Alpha").run()
+assert not app.exception
+assert any("1 ligne(s)" in item.value for item in app.caption)
+next(w for w in app.number_input if w.label == "Quantité").set_value(3)
+next(b for b in app.button if b.label == "Enregistrer").click().run()
+assert not app.exception
+assert next(card for card in inventory.get_collection() if card["scryfall_id"] == "a")["quantity"] == 3
+next(w for w in app.radio if w.label == "Affichage").set_value("Tableau").run()
+assert not app.exception
+next(w for w in app.number_input if w.label == "Prix réel de vente (€) :").set_value(7.0)
+next(b for b in app.button if b.label == "Confirmer la vente").click().run()
+assert not app.exception
+cards = inventory.get_collection()
+assert any(card["scryfall_id"] == "a" and card["status"] == "SOLD"
+           and card["actual_sale_price"] == 7 for card in cards), cards
+assert any(card["scryfall_id"] == "b" and card["status"] == "FOR_SALE" for card in cards), cards
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            env = os.environ.copy()
+            for name in ("DATABASE_URL", "MTG_DATABASE_URL", "GITHUB_ACTIONS", "DISCORD_WEBHOOK_URL"):
+                env.pop(name, None)
+            env["MTG_DATABASE_PATH"] = str(Path(directory) / "test.sqlite3")
+            env["MTG_LAZY_NAVIGATION"] = "true"
+            env["PYTHONIOENCODING"] = "utf-8"
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1],
+                env=env, capture_output=True, text=True, timeout=90,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_optional_navigation_only_renders_selected_tab(self):
         script = """
 from unittest.mock import patch

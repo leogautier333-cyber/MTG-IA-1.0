@@ -88,6 +88,19 @@ class PortfolioTests(unittest.TestCase):
         self.assertEqual(series[0], {"date": "2026-01-01", "value": 20.0, "cost": 10.0})
         self.assertEqual(series[1]["value"], 0.0)
 
+    def test_value_series_carries_latest_matching_foil_price_forward(self):
+        history = {"a": {
+            "2026-01-03": {"eur": 7},
+            "2026-01-01": {"eur": 5, "eur_foil": 9},
+            "2026-01-02": {"eur_foil": 10},
+        }}
+        cards = [
+            {"scryfall_id": "a", "foil": False, "quantity": 2, "status": "FOR_SALE"},
+            {"scryfall_id": "a", "foil": True, "quantity": 1, "status": "FOR_SALE"},
+        ]
+        series = portfolio_history.value_series(cards, history)
+        self.assertEqual([point["value"] for point in series], [19, 20, 24])
+
     def test_metrics_cover_only_current_stock_and_flag_missing_stale_prices(self):
         collection = [
             {"scryfall_id": "a", "name": "A", "set_code": "SET", "quantity": 2,

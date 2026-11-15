@@ -54,6 +54,8 @@ class PostgresIntegrationTests(unittest.TestCase):
 
     def test_schema_migration_stock_and_backup_roundtrip(self):
         from database import snapshot
+        from database.backup import create_backup, restore_backup
+        from cryptography.fernet import Fernet
         from services import inventory
 
         inventory.add_card_to_collection(
@@ -68,6 +70,15 @@ class PostgresIntegrationTests(unittest.TestCase):
             purchase_price=1, selling_price=2,
         )
         snapshot.restore_database_snapshot(backup)
+        self.assertEqual(inventory.get_collection(), before)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
+            backup_path = Path(directory) / "test.enc"
+            create_backup(backup_path)
+            inventory.add_card_to_collection(
+                scryfall_id="other", name="Other", set_code="tst", purchase_price=1, selling_price=2,
+            )
+            restore_backup(backup_path)
         self.assertEqual(inventory.get_collection(), before)
 
     def test_failed_transaction_rolls_back(self):
@@ -87,4 +98,3 @@ class PostgresIntegrationTests(unittest.TestCase):
                     self.fail("Verrou déjà détenu")
         with _analysis_lock():
             pass
-

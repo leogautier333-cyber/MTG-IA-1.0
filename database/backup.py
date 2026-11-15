@@ -1,16 +1,28 @@
 import argparse
+import base64
 import gzip
 import json
 import os
+import tempfile
+import zlib
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from database import snapshot
 
 
 class BackupEncryptionError(RuntimeError):
     """Raised when the backup encryption key is missing or invalid."""
+
+
+STREAM_HEADER = b"MTGSQL2"
+NONCE_SIZE = 12
+TAG_SIZE = 16
 
 
 def _fernet():
@@ -42,8 +54,30 @@ def create_backup_bytes(snapshot_data=None):
     return _fernet().encrypt(compressed)
 
 
+def _stream_key():
+    _fernet()
+    key = base64.urlsafe_b64decode(os.environ["BACKUP_ENCRYPTION_KEY"])
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+                info=b"magic-trading-sql-backup-v2").derive(key)
+
+
 def restore_backup_bytes(encrypted_bytes, allow_plaintext_legacy=False):
-    if allow_plaintext_legacy and encrypted_bytes.startswith(b"\x1f\x8b"):
+    if encrypted_bytes.startswith(STREAM_HEADER):
+        prefix_size = len(STREAM_HEADER) + NONCE_SIZE
+        if len(encrypted_bytes) < prefix_size + TAG_SIZE:
+            raise BackupEncryptionError("Backup is incomplete.")
+        nonce = encrypted_bytes[len(STREAM_HEADER):prefix_size]
+        ciphertext = encrypted_bytes[prefix_size:-TAG_SIZE]
+        tag = encrypted_bytes[-TAG_SIZE:]
+        decryptor = Cipher(algorithms.AES(_stream_key()), modes.GCM(nonce, tag)).decryptor()
+        decryptor.authenticate_additional_data(STREAM_HEADER)
+        try:
+            compressed = decryptor.update(ciphertext) + decryptor.finalize()
+        except InvalidTag:
+            raise BackupEncryptionError(
+                "Backup authentication failed; the key is incorrect or the archive was modified."
+            ) from None
+    elif allow_plaintext_legacy and encrypted_bytes.startswith(b"\x1f\x8b"):
         compressed = encrypted_bytes
     else:
         try:
@@ -62,7 +96,26 @@ def restore_backup_bytes(encrypted_bytes, allow_plaintext_legacy=False):
 def create_backup(destination):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(create_backup_bytes())
+    nonce = os.urandom(NONCE_SIZE)
+    encryptor = Cipher(algorithms.AES(_stream_key()), modes.GCM(nonce)).encryptor()
+    encryptor.authenticate_additional_data(STREAM_HEADER)
+    compressor = zlib.compressobj(wbits=31)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=destination.parent,
+                                         prefix=destination.name + ".", suffix=".tmp",
+                                         delete=False) as output:
+            temporary_path = Path(output.name)
+            output.write(STREAM_HEADER + nonce)
+            for chunk in snapshot.iter_database_snapshot_json():
+                output.write(encryptor.update(compressor.compress(chunk)))
+            output.write(encryptor.update(compressor.flush()))
+            output.write(encryptor.finalize())
+            output.write(encryptor.tag)
+        temporary_path.replace(destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return destination
 
 

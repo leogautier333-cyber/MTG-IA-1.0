@@ -11,7 +11,9 @@ from database import market_data, snapshot, storage
 from database.backup import (
     BackupEncryptionError,
     create_backup,
+    create_backup_bytes,
     restore_backup,
+    restore_backup_bytes,
 )
 from database.healthcheck import check_database
 
@@ -257,6 +259,31 @@ class StorageTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(BackupEncryptionError, "BACKUP_ENCRYPTION_KEY is required"):
                 create_backup(Path(self.temporary_directory.name) / "missing-key.enc")
+
+    def test_stream_backup_detects_tampering_and_legacy_fernet_still_restores(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        legacy = create_backup_bytes()
+        path = Path(self.temporary_directory.name) / "stream.enc"
+        create_backup(path)
+        encrypted = bytearray(path.read_bytes())
+        encrypted[-17] ^= 1
+        with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+            restore_backup_bytes(bytes(encrypted))
+        self.assertEqual(storage.get_collection(), [card])
+        storage.save_collection([])
+        restore_backup_bytes(legacy)
+        self.assertEqual(storage.get_collection(), [card])
+
+    def test_failed_stream_does_not_replace_existing_backup(self):
+        path = Path(self.temporary_directory.name) / "existing.enc"
+        path.write_bytes(b"existing")
+        with patch.object(snapshot, "iter_database_snapshot_json", side_effect=RuntimeError("test")):
+            with self.assertRaisesRegex(RuntimeError, "test"):
+                create_backup(path)
+        self.assertEqual(path.read_bytes(), b"existing")
+        self.assertEqual(list(path.parent.glob("existing.enc.*.tmp")), [])
 
 
 if __name__ == "__main__":

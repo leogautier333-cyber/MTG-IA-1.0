@@ -180,6 +180,21 @@ with patch.object(github_actions, "latest_run", return_value=None) as github:
     assert github.call_count == 3
     app.radio(key="main_navigation").set_value("Recherche & Ajout").run()
     assert not app.exception
+    with patch("scryfall.search_card_autocomplete", return_value=["Example"]), \\
+         patch("scryfall.get_card_by_name", return_value={
+             "id": "test", "name": "Example", "oracle_id": "oracle",
+             "set": "tst", "collector_number": "1"
+         }), \\
+         patch("scryfall.get_card_prints", return_value=[{
+             "id": "test", "name": "Example", "set": "tst", "set_name": "Test",
+             "collector_number": "1", "prices": {"eur": "2"}
+         }]):
+        app.text_input[0].set_value("Example").run()
+        assert not app.exception
+        assert any(b.label == "Ajouter à mon stock" for b in app.button)
+        next(b for b in app.button if b.label == "Ajouter à mon stock").click().run()
+        assert not app.exception
+        assert any(card["scryfall_id"] == "test" for card in inventory.get_collection())
     app.radio(key="main_navigation").set_value("Nexus").run()
     assert not app.exception
     app.radio(key="main_navigation").set_value("Stock & Ventes").run()

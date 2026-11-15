@@ -18,6 +18,7 @@ Organisation du code :
 - `modules/` et le reste de `services/` : fonctions « Nexus » (watchlist, signaux, backtesting, assistant), affichées dans l'onglet « Nexus » de l'interface.
 - `modules/sales_view.py` : affichage du bilan des ventes, alimenté par les services métier et la façade de lecture.
 - `modules/prices_view.py` : affichage des prix, alertes et actions GitHub, avec bouton Discord isolé par fragment.
+- `modules/search_view.py` : recherche Scryfall et préparation des imports génériques ou Cardmarket.
 - `agents/tools.py` lit le stock par le service métier, sans importer la façade ou le cache Streamlit.
 
 Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les cartes vendues et les cartes qui ne figurent pas dans l'inventaire ne sont jamais demandées à Scryfall par le moniteur de phase 1.

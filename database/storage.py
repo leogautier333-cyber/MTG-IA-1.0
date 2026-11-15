@@ -34,6 +34,16 @@ def _is_github_actions():
     return os.getenv("GITHUB_ACTIONS", "").lower() == "true"
 
 
+def _requires_postgres():
+    return _is_github_actions() or os.getenv("MTG_REQUIRE_POSTGRES", "").lower() == "true"
+
+
+def _missing_database_message():
+    if _is_github_actions():
+        return "DATABASE_URL is required in GitHub Actions; refusing to use ephemeral SQLite."
+    return "DATABASE_URL is required when MTG_REQUIRE_POSTGRES=true; refusing to use SQLite."
+
+
 def _configured_database_url():
     return os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL") or DATABASE_URL
 
@@ -41,11 +51,8 @@ def _configured_database_url():
 def get_database_backend():
     if _configured_database_url():
         return "postgres"
-    if _is_github_actions():
-        raise DatabaseConfigurationError(
-            "DATABASE_URL is required in GitHub Actions; refusing to use ephemeral SQLite. "
-            "Configure a PostgreSQL URI as the DATABASE_URL Actions secret."
-        )
+    if _requires_postgres():
+        raise DatabaseConfigurationError(_missing_database_message())
     return "sqlite"
 
 
@@ -124,11 +131,8 @@ def _connect():
             ) from None
         return _DatabaseConnection(connection, "postgres")
 
-    if _is_github_actions():
-        raise DatabaseConfigurationError(
-            "DATABASE_URL is required in GitHub Actions; refusing to use ephemeral SQLite. "
-            "Configure a PostgreSQL URI as the DATABASE_URL Actions secret."
-        )
+    if _requires_postgres():
+        raise DatabaseConfigurationError(_missing_database_message())
 
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=30)
@@ -217,7 +221,7 @@ def _migrate_legacy_data(connection):
                     continue
                 _insert_snapshot(
                     connection, scryfall_id, False, "FR", "NM",
-                    snapshot_day, observed_at, price,
+                    snapshot_day, observed_at, price, preserve_existing=True,
                 )
         connection.execute(
             "INSERT INTO metadata(key, value) VALUES ('legacy_watchlist_history_migrated', '1')"
@@ -278,7 +282,7 @@ def _import_legacy_price_history(connection, path):
                 try:
                     _insert_snapshot(
                         connection, scryfall_id, foil, "FR", "NM",
-                        snapshot_day, str(timestamp), float(price),
+                        snapshot_day, str(timestamp), float(price), preserve_existing=True,
                     )
                 except (TypeError, ValueError):
                     continue
@@ -286,10 +290,8 @@ def _import_legacy_price_history(connection, path):
 
 def initialize_database():
     database_url = _configured_database_url()
-    if not database_url and _is_github_actions():
-        raise DatabaseConfigurationError(
-            "DATABASE_URL is required in GitHub Actions; refusing to initialize an ephemeral SQLite database."
-        )
+    if not database_url and _requires_postgres():
+        raise DatabaseConfigurationError(_missing_database_message())
     database_path = database_url or str(DATABASE_PATH.resolve())
     if database_path in _INITIALIZED_PATHS:
         return
@@ -736,13 +738,18 @@ def save_watchlist(watchlist):
         _replace_watchlist(connection, watchlist)
 
 
-def _insert_snapshot(connection, scryfall_id, foil, language, condition, snapshot_day, observed_at, price):
+def _insert_snapshot(connection, scryfall_id, foil, language, condition, snapshot_day, observed_at, price,
+                     preserve_existing=False):
+    conflict_action = (
+        "DO NOTHING" if preserve_existing
+        else "DO UPDATE SET observed_at = excluded.observed_at, price_eur = excluded.price_eur"
+    )
     connection.execute(
-        """INSERT INTO price_snapshots(
+        f"""INSERT INTO price_snapshots(
             scryfall_id, foil, language, condition, snapshot_date, observed_at, price_eur
         ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(scryfall_id, foil, language, condition, snapshot_date)
-        DO UPDATE SET observed_at = excluded.observed_at, price_eur = excluded.price_eur""",
+        {conflict_action}""",
         (
             str(scryfall_id), int(bool(foil)), str(language), str(condition),
             snapshot_day, observed_at, float(price),

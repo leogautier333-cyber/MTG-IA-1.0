@@ -5,6 +5,7 @@
 Le stock, l'historique de prix et les alertes de variation vivent dans la base SQL (`database/storage.py`) : PostgreSQL si `DATABASE_URL` est défini (Neon), sinon SQLite locale `data/mtg_manager.sqlite3`. C'est l'unique source de vérité. Les anciens fichiers `data/*.json` ne sont lus qu'une seule fois, à l'initialisation, pour migration ; ils sont ignorés par Git et peuvent servir de copie locale.
 
 La migration refuse un fichier historique illisible ou une importation dans une table déjà remplie ; un fichier absent ne remplace jamais le stock existant. L'initialisation PostgreSQL utilise un verrou partagé entre processus. Une synchronisation Bulk vide ou dont la taille est inférieure à la moitié du catalogue existant est annulée : vérifier la source avant toute intervention manuelle.
+Un historique JSON réimporté ne remplace pas un relevé SQL déjà présent. En hébergement, `MTG_REQUIRE_POSTGRES=true` interdit le repli silencieux sur SQLite si l'URL de base est absente.
 
 Organisation du code :
 - `database/` : `storage.py` (connexion, schéma, stock, prix, alertes), `market_data.py` (impressions Scryfall, EDHREC, réimpressions), `snapshot.py` (export/restauration), `backup.py` (sauvegarde chiffrée), `healthcheck.py`.

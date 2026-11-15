@@ -38,6 +38,16 @@ class FakeConnection:
 
 
 class PostgresAdapterTests(unittest.TestCase):
+    def test_explicit_hosted_mode_requires_postgres(self):
+        with patch.object(storage, "DATABASE_URL", None), patch.dict(os.environ, {
+            "DATABASE_URL": "", "MTG_DATABASE_URL": "", "GITHUB_ACTIONS": "",
+            "MTG_REQUIRE_POSTGRES": "true",
+        }):
+            with self.assertRaisesRegex(storage.DatabaseConfigurationError, "MTG_REQUIRE_POSTGRES"):
+                storage.get_database_backend()
+            with self.assertRaises(storage.DatabaseConfigurationError):
+                storage.initialize_database()
+
     def test_missing_database_url_in_github_actions_fails_clearly(self):
         with patch.object(storage, "DATABASE_URL", None), patch.dict(os.environ, {
             "DATABASE_URL": "", "MTG_DATABASE_URL": "", "GITHUB_ACTIONS": "true",

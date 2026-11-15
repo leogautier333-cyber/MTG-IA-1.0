@@ -166,6 +166,13 @@ class StorageTests(unittest.TestCase):
                                       observed_at="2026-11-01T11:00:00+00:00")
         self.assertEqual(storage.get_price_history()["card"]["2026-11-01"]["eur"], 10)
 
+    def test_legacy_history_reimport_does_not_overwrite_existing_snapshot(self):
+        storage.record_price_snapshot("card", 20, observed_at="2026-11-01T11:00:00+00:00")
+        path = self.database_path.parent / "price_history.json"
+        path.write_text('{"card":{"2026-11-01_10h":{"eur":2}}}', encoding="utf-8")
+        storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
+        self.assertEqual(storage.get_price_history()["card"]["2026-11-01"]["eur"], 20)
+
     def test_bulk_diff_detects_reprints_and_duel_legality_changes(self):
         initial = market_data.sync_bulk_prints([
             {

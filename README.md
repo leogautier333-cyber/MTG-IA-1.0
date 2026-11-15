@@ -25,6 +25,9 @@ de secrets (avant toute section TOML), afin d'être disponibles comme variables
 d'environnement. Pour le bouton de test Discord dans l'application, configurer
 également `DISCORD_WEBHOOK_URL` dans Streamlit. Les secrets Streamlit et GitHub
 Actions sont indépendants ; ne jamais les enregistrer dans Git.
+Pour empêcher tout repli vers une base SQLite locale lorsque l'application est
+hébergée, définir également `MTG_REQUIRE_POSTGRES = "true"` dans les secrets
+Streamlit ; une `DATABASE_URL` manquante bloquera alors le démarrage.
 
 Le test Discord actualise uniquement son bouton. Les relevés SQL sont regroupés
 par lots ; les états des workflows GitHub et les données de cartes consultées

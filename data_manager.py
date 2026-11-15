@@ -16,7 +16,12 @@ CACHE_TTL_SECONDS = 60
 
 
 def clear_cache():
-    st.cache_data.clear()
+    get_collection.clear()
+    get_watchlist.clear()
+    get_price_history.clear()
+    get_variant_price_history.clear()
+    get_price_alerts.clear()
+    get_popularity_deltas.clear()
 
 
 def _invalidating(function):

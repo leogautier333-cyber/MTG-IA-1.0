@@ -1019,6 +1019,10 @@ with tab_prices:
 
     st.divider()
     st.subheader("Valeur du stock dans le temps")
+    st.caption(
+        "Courbe indicative : les quantités et coûts actuels sont appliqués aux dates passées ; "
+        "les mouvements historiques ne sont pas tous enregistrés."
+    )
     value_points = portfolio_history.value_series(
         data_manager.get_collection(), data_manager.get_price_history()
     )

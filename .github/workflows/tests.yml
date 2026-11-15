@@ -1,0 +1,46 @@
+name: Tests isolés
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mtg_test
+          POSTGRES_PASSWORD: local_test_only
+          POSTGRES_DB: mtg_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mtg_test -d mtg_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Installer les dépendances
+        run: python -m pip install -r requirements.txt
+      - name: Tests SQLite isolés
+        env:
+          GITHUB_ACTIONS: ''
+          DATABASE_URL: ''
+          MTG_DATABASE_URL: ''
+        run: python -m unittest discover -s tests
+      - name: Tests PostgreSQL local jetable
+        env:
+          MTG_RUN_POSTGRES_TESTS: 'true'
+          MTG_TEST_POSTGRES_URL: postgresql://mtg_test:local_test_only@127.0.0.1:5432/mtg_test
+        run: python -m unittest discover -s tests -p test_postgres_integration.py

@@ -55,6 +55,9 @@ Les fiches correspondantes conservent notamment leur prix d'achat et leur journa
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
+Le workflow `tests.yml` exécute aussi les tests PostgreSQL sur un service local
+jetable. Ils refusent toute URL distante ou base autre que `mtg_test`.
+
 ## Restaurer une sauvegarde
 
 ```powershell

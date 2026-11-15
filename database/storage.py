@@ -14,6 +14,7 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
+SCHEMA_VERSION = 1
 
 REQUIRED_TABLES = frozenset({
     "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
@@ -288,6 +289,41 @@ def _import_legacy_price_history(connection, path):
                     continue
 
 
+def _migrate_schema(connection):
+    row = connection.execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
+    try:
+        version = int(row["value"]) if row else 0
+    except (TypeError, ValueError) as error:
+        raise DatabaseConfigurationError("Invalid database schema version.") from error
+    if version < 0 or version > SCHEMA_VERSION:
+        raise DatabaseConfigurationError(
+            f"Unsupported database schema version {version}; update the application."
+        )
+    if version < 1:
+        if connection.dialect == "postgres":
+            bulk_columns = {
+                row["name"] for row in connection.execute(
+                    """SELECT column_name AS name FROM information_schema.columns
+                       WHERE table_schema = current_schema() AND table_name = 'bulk_prints'"""
+                ).fetchall()
+            }
+        else:
+            bulk_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
+            }
+        for column_name, column_type in (
+            ("price_eur", "REAL"), ("price_eur_foil", "REAL"), ("edhrec_rank", "INTEGER")
+        ):
+            if column_name not in bulk_columns:
+                connection.execute(f"ALTER TABLE bulk_prints ADD COLUMN {column_name} {column_type}")
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', '1')
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+
+
 def initialize_database():
     database_url = _configured_database_url()
     if not database_url and _requires_postgres():
@@ -397,27 +433,9 @@ def initialize_database():
             if database_url:
                 schema = schema.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
             connection.executescript(schema)
-            if database_url:
-                bulk_columns = {
-                    row["name"] for row in connection.execute(
-                        """SELECT column_name AS name FROM information_schema.columns
-                           WHERE table_schema = current_schema() AND table_name = 'bulk_prints'"""
-                    ).fetchall()
-                }
-            else:
-                bulk_columns = {
-                    row["name"] for row in connection.execute("PRAGMA table_info(bulk_prints)")
-                }
-            column_types = {
-                "price_eur": "REAL",
-                "price_eur_foil": "REAL",
-                "edhrec_rank": "INTEGER",
-            }
-            for column_name, column_type in column_types.items():
-                if column_name not in bulk_columns:
-                    connection.execute(
-                        f"ALTER TABLE bulk_prints ADD COLUMN {column_name} {column_type}"
-                    )
+            if not database_url:
+                connection.execute("BEGIN IMMEDIATE")
+            _migrate_schema(connection)
             _migrate_legacy_data(connection)
         _INITIALIZED_PATHS.add(database_path)
 

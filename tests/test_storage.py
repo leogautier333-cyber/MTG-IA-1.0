@@ -41,6 +41,13 @@ class StorageTests(unittest.TestCase):
         result = check_database()
         self.assertEqual(result["backend"], "sqlite")
         self.assertEqual(result["table_count"], len(storage.REQUIRED_TABLES))
+        self.assertEqual(storage.get_metadata("schema_version"), str(storage.SCHEMA_VERSION))
+
+    def test_newer_schema_is_rejected_without_overwriting_version(self):
+        storage.set_metadata("schema_version", "999")
+        storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
+        with self.assertRaisesRegex(storage.DatabaseConfigurationError, "Unsupported database schema"):
+            storage.initialize_database()
 
     def test_missing_legacy_marker_does_not_erase_existing_stock(self):
         card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",

@@ -537,16 +537,17 @@ def _analyze_stock_prices(session=requests, events=()):
 
 def run_analysis(session=requests):
     """Analyse complète : veille d'événements du stock puis variations de prix."""
-    started = time.perf_counter()
-    try:
-        events = scan_stock_events(session=session)
-    except Exception:
-        LOGGER.exception("Échec de la veille spoilers/Reddit ; analyse des prix poursuivie.")
-        events = []
-    LOGGER.info("Veille événements : %.2fs.", time.perf_counter() - started)
-    result = analyze_stock_prices(session=session, events=events)
-    result["events_detected"] = len(events)
-    return result
+    with _analysis_lock():
+        started = time.perf_counter()
+        try:
+            events = scan_stock_events(session=session)
+        except Exception:
+            LOGGER.exception("Échec de la veille spoilers/Reddit ; analyse des prix poursuivie.")
+            events = []
+        LOGGER.info("Veille événements : %.2fs.", time.perf_counter() - started)
+        result = _analyze_stock_prices(session=session, events=events)
+        result["events_detected"] = len(events)
+        return result
 
 
 def run_forever():

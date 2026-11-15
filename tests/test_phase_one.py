@@ -63,6 +63,10 @@ class PhaseOneTests(unittest.TestCase):
         with phase_one_monitor._analysis_lock():
             with self.assertRaisesRegex(RuntimeError, "déjà en cours"):
                 phase_one_monitor.analyze_stock_prices()
+            with patch.object(phase_one_monitor, "scan_stock_events") as scan:
+                with self.assertRaisesRegex(RuntimeError, "déjà en cours"):
+                    phase_one_monitor.run_analysis()
+                scan.assert_not_called()
         result = phase_one_monitor.analyze_stock_prices()
         self.assertEqual(result["analyzed"], 0)
 

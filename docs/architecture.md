@@ -43,6 +43,8 @@ Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'op�
 
 Installer les dépendances du projet avec `python -m pip install -r requirements.txt`, définir `DATABASE_URL` (PostgreSQL), vérifier avec `python -m database.healthcheck`, puis lancer l'interface avec `streamlit run app.py`.
 
+Par défaut, l'interface conserve ses onglets classiques. Pour réduire le travail à chaque interaction, définir `MTG_LAZY_NAVIGATION=true` dans l'environnement ou les secrets Streamlit : un sélecteur remplace les onglets et seul l'écran sélectionné est exécuté. Les champs non enregistrés d'un écran peuvent être réinitialisés lors du changement de navigation ; terminer ou enregistrer une saisie avant de changer d'écran.
+
 Configurer `DISCORD_WEBHOOK_URL` dans l'environnement local sans l'inscrire dans Git. L'interface fournit un bouton d'alerte test Discord, qui n'analyse ni ne modifie le stock.
 
 Lancer une analyse ponctuelle avec `python -m services.phase_one_monitor --once`. Pour un suivi régulier, lancer le processus persistant avec `python -m services.phase_one_monitor`. L'intervalle par défaut est d'une heure et peut être réglé avec `NEXUS_POLL_INTERVAL_SECONDS` (minimum cinq minutes).

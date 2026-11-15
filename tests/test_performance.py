@@ -130,6 +130,47 @@ class BatchReadTests(unittest.TestCase):
 
 
 class DiscordFragmentTests(unittest.TestCase):
+    def test_optional_navigation_only_renders_selected_tab(self):
+        script = """
+from unittest.mock import patch
+from streamlit.testing.v1 import AppTest
+from services import github_actions
+
+with patch.object(github_actions, "latest_run", return_value=None) as github:
+    app = AppTest.from_file("app.py", default_timeout=60).run()
+    assert not app.exception
+    assert github.call_count == 0
+    assert any("Tableau de bord" in h.value for h in app.header)
+    app.radio(key="main_navigation").set_value("Prix & Alertes").run()
+    assert not app.exception
+    assert github.call_count == 3, github.call_count
+    assert not any("Tableau de bord" in h.value for h in app.header)
+    app.radio(key="main_navigation").set_value("Bilan des ventes").run()
+    assert not app.exception
+    assert any("Bilan des ventes" in h.value for h in app.header)
+    assert github.call_count == 3
+    app.radio(key="main_navigation").set_value("Recherche & Ajout").run()
+    assert not app.exception
+    app.radio(key="main_navigation").set_value("Nexus").run()
+    assert not app.exception
+    app.radio(key="main_navigation").set_value("Stock & Ventes").run()
+    assert not app.exception
+    assert any("Tableau de bord" in h.value for h in app.header)
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            env = os.environ.copy()
+            for name in ("DATABASE_URL", "MTG_DATABASE_URL", "GITHUB_ACTIONS", "DISCORD_WEBHOOK_URL"):
+                env.pop(name, None)
+            env["MTG_DATABASE_PATH"] = str(Path(directory) / "test.sqlite3")
+            env["MTG_LAZY_NAVIGATION"] = "true"
+            env["GITHUB_DISPATCH_TOKEN"] = "fake-token"
+            env["PYTHONIOENCODING"] = "utf-8"
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1],
+                env=env, capture_output=True, text=True, timeout=90,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_discord_click_sends_and_shows_result(self):
         script = """
 import streamlit as st
@@ -170,6 +211,7 @@ with patch.object(github_actions, "latest_run", return_value=None) as github, \\
             env = os.environ.copy()
             for name in ("DATABASE_URL", "MTG_DATABASE_URL", "GITHUB_ACTIONS", "DISCORD_WEBHOOK_URL"):
                 env.pop(name, None)
+            env.pop("MTG_LAZY_NAVIGATION", None)
             env["MTG_DATABASE_PATH"] = str(Path(directory) / "test.sqlite3")
             env["GITHUB_DISPATCH_TOKEN"] = "fake-token"
             env["PYTHONIOENCODING"] = "utf-8"

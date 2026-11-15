@@ -1,7 +1,9 @@
 import json
 import hashlib
+import os
 import re
 
+from contextlib import nullcontext
 from datetime import date
 
 import pandas as pd
@@ -69,13 +71,13 @@ def price_history_frame(history):
 def render_mana_cost_html(mana_str):
     if not mana_str:
         return ""
-    
+
     def replacer(match):
         symbol = match.group(1)  # ex: "2", "G", "W/P", "X"
         code = symbol.replace("/", "")
         url = f"https://svgs.scryfall.io/card-symbols/{code}.svg"
         return f'<img src="{url}" width="20" style="vertical-align: middle; margin: 0 1px;" alt="{symbol}" />'
-    
+
     return re.sub(r'\{([^}]+)\}', replacer, mana_str)
 
 
@@ -240,942 +242,953 @@ input[type="radio"] { accent-color: var(--gold) !important; }
 
 st.title("Magic Trading & Profit Manager")
 
-# Onglets principaux
-tab_stock, tab_search, tab_prices, tab_sales, tab_nexus = st.tabs([
+tab_names = [
     "Stock & Ventes",
     "Recherche & Ajout",
     "Prix & Alertes",
     "Bilan des ventes",
     "Nexus"
-])
+]
+lazy_navigation = os.getenv("MTG_LAZY_NAVIGATION", "").lower() == "true"
+if lazy_navigation:
+    active_tab = st.radio("Navigation", tab_names, horizontal=True, key="main_navigation")
+    tab_stock = tab_search = tab_prices = tab_sales = tab_nexus = nullcontext()
+else:
+    active_tab = None
+    tab_stock, tab_search, tab_prices, tab_sales, tab_nexus = st.tabs(tab_names)
 
 
 # ===================================================================
 # TAB 1 : STOCK & TABLEAU DE BORD FINANCIER
 # ===================================================================
-with tab_stock:
-    st.header("Tableau de bord & Stock")
+if active_tab is None or active_tab == "Stock & Ventes":
+    with tab_stock:
+        st.header("Tableau de bord & Stock")
 
-    collection = data_manager.get_collection()
-    price_history = data_manager.get_price_history()
-    metrics = portfolio_metrics.summarize(collection, price_history)
-    if metrics["cards"]:
-        st.subheader("Vue du stock · cartes en vente")
-        unresolved = [
-            card for card in collection
-            if card.get("status", "FOR_SALE") == "FOR_SALE"
-            and card.get("scryfall_resolution_pending")
-        ]
-        if unresolved:
-            st.warning(
-                f"{len(unresolved)} ligne(s) sans correspondance Scryfall exacte : "
-                + ", ".join(card.get("name", "Carte") for card in unresolved)
-                + ". Le suivi de prix et la vente dans l'application sont indisponibles pour ces cartes."
-            )
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Cartes en stock", f"{metrics['copies']} exemplaires",
-                              f"{metrics['cards']} lignes")
-        metric_cols[1].metric(
-            "Valeur aux prix de vente", f"{metrics['asking_value']:.2f} €",
-            help="Somme des prix de vente unitaires enregistrés, multipliés par les quantités. "
-                 "Ce montant ne garantit pas une vente.",
-        )
-        metric_cols[2].metric(
-            "Valeur marché estimée",
-            f"{metrics['gross_value']:.2f} €" if metrics["coverage_pct"] else "—",
-            help="Somme des derniers relevés Scryfall disponibles, multipliés par les quantités. "
-                 "Elle peut être incomplète et ne garantit pas une vente.",
-        )
-        metric_cols[3].metric(
-            "Prix couverts", f"{metrics['coverage_pct']:.0f} %",
-            f"{metrics['missing_prices']} sans prix · {metrics['stale_prices']} anciens (> 7 j)",
-        )
-        if metrics["missing_prices"] or metrics["stale_prices"]:
-            st.caption(
-                "Les cartes sans relevé ne sont pas incluses dans cette valeur; "
-                "les prix sont des références Scryfall indicatives."
-            )
-        exposure_col, stress_col = st.columns([3, 2])
-        with exposure_col:
-            st.caption("Exposition par carte · les 10 plus grosses positions")
-            top_positions = metrics["positions"][:10]
-            if top_positions:
-                exposure_frame = pd.DataFrame(top_positions)
-                exposure_frame["Carte"] = exposure_frame.apply(
-                    lambda row: f"{row['name']} · {row['set_code']}", axis=1
-                )
-                st.plotly_chart(
-                    px.bar(exposure_frame, x="market_value", y="Carte", orientation="h",
-                           labels={"market_value": "Valeur marché (€)"})
-                    .update_layout(yaxis={"categoryorder": "total ascending"}),
-                    use_container_width=True,
-                )
-            if metrics["set_exposure"]:
-                st.caption("Exposition par édition")
-                st.dataframe(
-                    [{
-                        "Édition": set_code, "Valeur (€)": round(value, 2),
-                        "Part du portefeuille": f"{value / metrics['gross_value'] * 100:.1f}%"
-                        if metrics["gross_value"] else "—",
-                    } for set_code, value in metrics["set_exposure"]],
-                    hide_index=True, use_container_width=True,
-                )
-        with stress_col:
-            st.caption("Scénarios sur les prix de marché disponibles (simulation, pas une prévision)")
-            if metrics["coverage_pct"]:
-                st.dataframe(
-                    [{
-                        "Baisse": f"-{scenario['drop_pct']}%",
-                        "Valeur nette": f"{scenario['value_after_fees']:.2f} €",
-                        "Écart actuel": f"{scenario['change_vs_now']:+.2f} €",
-                    } for scenario in metrics["scenarios"]],
-                    hide_index=True, use_container_width=True,
-                )
-            else:
-                st.info("Aucun relevé Scryfall disponible pour calculer ces scénarios.")
-        st.divider()
-
-    indexed_cards = []
-    filtered_cards = []
-
-    if not collection:
-        st.info("Aucune carte enregistrée dans ton stock pour le moment.")
-    else:
-        with st.container(border=True):
-            st.subheader("🔍 Filtres et Options d'affichage")
-            filter_status, filter_view = st.columns([1.25, 1])
-            with filter_status:
-                status_filter = st.radio("Statut", ["En Vente", "Vendues"], horizontal=True)
-            with filter_view:
-                view_mode = st.radio("Affichage", ["Galerie", "Tableau"], horizontal=True)
-
-            target_status = "FOR_SALE" if status_filter == "En Vente" else "SOLD"
-
-            status_cards = [
+        collection = data_manager.get_collection()
+        price_history = data_manager.get_price_history()
+        metrics = portfolio_metrics.summarize(collection, price_history)
+        if metrics["cards"]:
+            st.subheader("Vue du stock · cartes en vente")
+            unresolved = [
                 card for card in collection
-                if card.get("status", "FOR_SALE") == target_status
+                if card.get("status", "FOR_SALE") == "FOR_SALE"
+                and card.get("scryfall_resolution_pending")
             ]
-            filter_search, filter_set, filter_sort = st.columns([2, 1.4, 1.6])
-            with filter_search:
-                search_stock = st.text_input("Rechercher", placeholder="Nom, code d'extension ou numéro")
-            with filter_set:
-                set_codes = sorted({str(c.get("set_code") or "").upper() for c in status_cards} - {""})
-                set_filter = st.selectbox("Extension", ["Toutes"] + set_codes)
-            with filter_sort:
-                sort_filter = st.selectbox("Trier par", stock_filters.SORT_OPTIONS)
-            filter_language, filter_condition, filter_foil, filter_min, filter_max = st.columns(5)
-            with filter_language:
-                languages = sorted({str(c.get("language") or "FR") for c in status_cards})
-                language_filter = st.selectbox("Langue", ["Toutes"] + languages)
-            with filter_condition:
-                conditions = sorted({str(c.get("condition") or "NM") for c in status_cards})
-                condition_filter = st.selectbox("État", ["Tous"] + conditions)
-            with filter_foil:
-                foil_filter = st.selectbox("Finition", ["Toutes", "Foil", "Non foil"])
-            with filter_min:
-                min_price = st.number_input("Prix min. (€)", min_value=0.0, value=0.0, step=0.5)
-            with filter_max:
-                max_price = st.number_input(
-                    "Prix max. (€)", min_value=0.0, value=0.0, step=0.5,
-                    help="0 signifie sans limite de prix maximum.",
+            if unresolved:
+                st.warning(
+                    f"{len(unresolved)} ligne(s) sans correspondance Scryfall exacte : "
+                    + ", ".join(card.get("name", "Carte") for card in unresolved)
+                    + ". Le suivi de prix et la vente dans l'application sont indisponibles pour ces cartes."
                 )
-
-        try:
-            indexed_cards = stock_filters.filter_stock(
-                collection, status=target_status, query=search_stock,
-                set_code="" if set_filter == "Toutes" else set_filter,
-                language="" if language_filter == "Toutes" else language_filter,
-                condition="" if condition_filter == "Tous" else condition_filter,
-                foil="" if foil_filter == "Toutes" else foil_filter,
-                min_price=min_price, max_price=max_price or None, sort_by=sort_filter,
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("Cartes en stock", f"{metrics['copies']} exemplaires",
+                                  f"{metrics['cards']} lignes")
+            metric_cols[1].metric(
+                "Valeur aux prix de vente", f"{metrics['asking_value']:.2f} €",
+                help="Somme des prix de vente unitaires enregistrés, multipliés par les quantités. "
+                     "Ce montant ne garantit pas une vente.",
             )
-        except ValueError as error:
-            st.warning(str(error))
-            indexed_cards = []
-        filtered_cards = [card for _, card in indexed_cards]
-        st.caption(
-            f"{len(filtered_cards)} ligne(s) · "
-            f"{sum(max(1, int(card.get('quantity') or 1)) for card in filtered_cards)} exemplaire(s)"
-        )
-        popularity_by_card = data_manager.get_popularity_deltas(
-            tuple(sorted({str(card["scryfall_id"]) for card in filtered_cards if card.get("scryfall_id")}))
-        )
-        st.divider()
-
-        if filtered_cards:
-            with st.container(border=True):
-                st.caption("Édition rapide")
-                edit_position = st.selectbox(
-                    "Carte à modifier",
-                    range(len(indexed_cards)),
-                    format_func=lambda position: (
-                        f"{indexed_cards[position][1].get('name', 'Carte sans nom')} · "
-                        f"{indexed_cards[position][1].get('set_code', '').upper()} · "
-                        f"#{indexed_cards[position][1].get('collector_number', 'N/A')}"
-                    ),
-                    key="quick_edit_position"
+            metric_cols[2].metric(
+                "Valeur marché estimée",
+                f"{metrics['gross_value']:.2f} €" if metrics["coverage_pct"] else "—",
+                help="Somme des derniers relevés Scryfall disponibles, multipliés par les quantités. "
+                     "Elle peut être incomplète et ne garantit pas une vente.",
+            )
+            metric_cols[3].metric(
+                "Prix couverts", f"{metrics['coverage_pct']:.0f} %",
+                f"{metrics['missing_prices']} sans prix · {metrics['stale_prices']} anciens (> 7 j)",
+            )
+            if metrics["missing_prices"] or metrics["stale_prices"]:
+                st.caption(
+                    "Les cartes sans relevé ne sont pas incluses dans cette valeur; "
+                    "les prix sont des références Scryfall indicatives."
                 )
-                record_index, edit_card = indexed_cards[edit_position]
-                with st.form(f"quick_edit_form_{record_index}"):
-                    edit_quantity, edit_selling, edit_target = st.columns(3)
-                    quantity_value = edit_quantity.number_input(
-                        "Quantité", min_value=1, value=max(1, int(edit_card.get("quantity", 1))), step=1
+            exposure_col, stress_col = st.columns([3, 2])
+            with exposure_col:
+                st.caption("Exposition par carte · les 10 plus grosses positions")
+                top_positions = metrics["positions"][:10]
+                if top_positions:
+                    exposure_frame = pd.DataFrame(top_positions)
+                    exposure_frame["Carte"] = exposure_frame.apply(
+                        lambda row: f"{row['name']} · {row['set_code']}", axis=1
                     )
-                    selling_value = edit_selling.number_input(
-                        "Prix de vente unitaire (€)", min_value=0.0,
-                        value=float(edit_card.get("selling_price", 0)), step=0.5
+                    st.plotly_chart(
+                        px.bar(exposure_frame, x="market_value", y="Carte", orientation="h",
+                               labels={"market_value": "Valeur marché (€)"})
+                        .update_layout(yaxis={"categoryorder": "total ascending"}),
+                        use_container_width=True,
                     )
-                    target_value = edit_target.number_input(
-                        "Objectif de vente (€, 0 = aucun)", min_value=0.0,
-                        value=float(edit_card.get("target_price") or 0), step=0.5
+                if metrics["set_exposure"]:
+                    st.caption("Exposition par édition")
+                    st.dataframe(
+                        [{
+                            "Édition": set_code, "Valeur (€)": round(value, 2),
+                            "Part du portefeuille": f"{value / metrics['gross_value'] * 100:.1f}%"
+                            if metrics["gross_value"] else "—",
+                        } for set_code, value in metrics["set_exposure"]],
+                        hide_index=True, use_container_width=True,
                     )
-                    save_quick_edit = st.form_submit_button("Enregistrer", type="primary")
+            with stress_col:
+                st.caption("Scénarios sur les prix de marché disponibles (simulation, pas une prévision)")
+                if metrics["coverage_pct"]:
+                    st.dataframe(
+                        [{
+                            "Baisse": f"-{scenario['drop_pct']}%",
+                            "Valeur nette": f"{scenario['value_after_fees']:.2f} €",
+                            "Écart actuel": f"{scenario['change_vs_now']:+.2f} €",
+                        } for scenario in metrics["scenarios"]],
+                        hide_index=True, use_container_width=True,
+                    )
+                else:
+                    st.info("Aucun relevé Scryfall disponible pour calculer ces scénarios.")
+            st.divider()
 
-                if save_quick_edit:
-                    if data_manager.update_card(
-                        edit_card, quantity_value, edit_card.get("purchase_price", 0),
-                        selling_value, target_value
+        indexed_cards = []
+        filtered_cards = []
+
+        if not collection:
+            st.info("Aucune carte enregistrée dans ton stock pour le moment.")
+        else:
+            with st.container(border=True):
+                st.subheader("🔍 Filtres et Options d'affichage")
+                filter_status, filter_view = st.columns([1.25, 1])
+                with filter_status:
+                    status_filter = st.radio("Statut", ["En Vente", "Vendues"], horizontal=True)
+                with filter_view:
+                    view_mode = st.radio("Affichage", ["Galerie", "Tableau"], horizontal=True)
+
+                target_status = "FOR_SALE" if status_filter == "En Vente" else "SOLD"
+
+                status_cards = [
+                    card for card in collection
+                    if card.get("status", "FOR_SALE") == target_status
+                ]
+                filter_search, filter_set, filter_sort = st.columns([2, 1.4, 1.6])
+                with filter_search:
+                    search_stock = st.text_input("Rechercher", placeholder="Nom, code d'extension ou numéro")
+                with filter_set:
+                    set_codes = sorted({str(c.get("set_code") or "").upper() for c in status_cards} - {""})
+                    set_filter = st.selectbox("Extension", ["Toutes"] + set_codes)
+                with filter_sort:
+                    sort_filter = st.selectbox("Trier par", stock_filters.SORT_OPTIONS)
+                filter_language, filter_condition, filter_foil, filter_min, filter_max = st.columns(5)
+                with filter_language:
+                    languages = sorted({str(c.get("language") or "FR") for c in status_cards})
+                    language_filter = st.selectbox("Langue", ["Toutes"] + languages)
+                with filter_condition:
+                    conditions = sorted({str(c.get("condition") or "NM") for c in status_cards})
+                    condition_filter = st.selectbox("État", ["Tous"] + conditions)
+                with filter_foil:
+                    foil_filter = st.selectbox("Finition", ["Toutes", "Foil", "Non foil"])
+                with filter_min:
+                    min_price = st.number_input("Prix min. (€)", min_value=0.0, value=0.0, step=0.5)
+                with filter_max:
+                    max_price = st.number_input(
+                        "Prix max. (€)", min_value=0.0, value=0.0, step=0.5,
+                        help="0 signifie sans limite de prix maximum.",
+                    )
+
+            try:
+                indexed_cards = stock_filters.filter_stock(
+                    collection, status=target_status, query=search_stock,
+                    set_code="" if set_filter == "Toutes" else set_filter,
+                    language="" if language_filter == "Toutes" else language_filter,
+                    condition="" if condition_filter == "Tous" else condition_filter,
+                    foil="" if foil_filter == "Toutes" else foil_filter,
+                    min_price=min_price, max_price=max_price or None, sort_by=sort_filter,
+                )
+            except ValueError as error:
+                st.warning(str(error))
+                indexed_cards = []
+            filtered_cards = [card for _, card in indexed_cards]
+            st.caption(
+                f"{len(filtered_cards)} ligne(s) · "
+                f"{sum(max(1, int(card.get('quantity') or 1)) for card in filtered_cards)} exemplaire(s)"
+            )
+            popularity_by_card = data_manager.get_popularity_deltas(
+                tuple(sorted({str(card["scryfall_id"]) for card in filtered_cards if card.get("scryfall_id")}))
+            )
+            st.divider()
+
+            if filtered_cards:
+                with st.container(border=True):
+                    st.caption("Édition rapide")
+                    edit_position = st.selectbox(
+                        "Carte à modifier",
+                        range(len(indexed_cards)),
+                        format_func=lambda position: (
+                            f"{indexed_cards[position][1].get('name', 'Carte sans nom')} · "
+                            f"{indexed_cards[position][1].get('set_code', '').upper()} · "
+                            f"#{indexed_cards[position][1].get('collector_number', 'N/A')}"
+                        ),
+                        key="quick_edit_position"
+                    )
+                    record_index, edit_card = indexed_cards[edit_position]
+                    with st.form(f"quick_edit_form_{record_index}"):
+                        edit_quantity, edit_selling, edit_target = st.columns(3)
+                        quantity_value = edit_quantity.number_input(
+                            "Quantité", min_value=1, value=max(1, int(edit_card.get("quantity", 1))), step=1
+                        )
+                        selling_value = edit_selling.number_input(
+                            "Prix de vente unitaire (€)", min_value=0.0,
+                            value=float(edit_card.get("selling_price", 0)), step=0.5
+                        )
+                        target_value = edit_target.number_input(
+                            "Objectif de vente (€, 0 = aucun)", min_value=0.0,
+                            value=float(edit_card.get("target_price") or 0), step=0.5
+                        )
+                        save_quick_edit = st.form_submit_button("Enregistrer", type="primary")
+
+                    if save_quick_edit:
+                        if data_manager.update_card(
+                            edit_card, quantity_value, edit_card.get("purchase_price", 0),
+                            selling_value, target_value
+                        ):
+                            st.toast("Modifications enregistrées", icon="✅")
+                        else:
+                            st.toast("Carte modifiée ailleurs : données rechargées, réessaie.", icon="⚠️")
+                        st.rerun()
+
+            if not filtered_cards:
+                st.info("Aucune carte ne correspond à ces filtres.")
+
+            # ---------------------------------------------------------------
+            # MODE 1 : GALERIE VISUELLE (TUILES DYNAMIQUES)
+            # ---------------------------------------------------------------
+            elif view_mode == "Galerie":
+                cols_per_row = 3
+                cols = st.columns(cols_per_row)
+
+                for idx, card in enumerate(filtered_cards):
+                    original_index = indexed_cards[idx][0]
+                    scryfall_data = None
+                    if card.get("name") and not card.get("scryfall_resolution_pending") and not card.get("image_url"):
+                        scryfall_data = data_manager.get_scryfall_card(card["name"])
+                    img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
+                    if not img_url and scryfall_data and "card_faces" in scryfall_data:
+                        img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
+
+                    with cols[idx % cols_per_row]:
+                        with st.container(border=True):
+                            if img_url:
+                                st.image(img_url, width="stretch")
+                            else:
+                                st.write("🖼️ *Image non disponible*")
+
+                            mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
+                            mana_html = render_mana_cost_html(mana_cost)
+                            st.markdown(f"**{card['name']}** {mana_html}", unsafe_allow_html=True)
+
+                            quantity = int(card.get("quantity", 1))
+                            st.markdown(
+                                f"<div class='card-meta'>`{card['set_code'].upper()}` · N° {card.get('collector_number', 'N/A')} · {card.get('condition', 'NM')} · {card.get('language', 'FR')} · Qté {quantity}{' · Foil' if card.get('foil') else ''}</div>",
+                                unsafe_allow_html=True
+                            )
+
+                            s_price = card.get("selling_price", 0.0)
+                            st.markdown(f"Prix de vente : **{s_price:.2f} €**")
+                            st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
+                                popularity_by_card.get(str(card.get("scryfall_id")))
+                            ))
+                            if target_status == "FOR_SALE" and card.get("scryfall_id"):
+                                with st.popover("Vendre", use_container_width=True):
+                                    actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{original_index}")
+                                    if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{original_index}", type="primary"):
+                                        if data_manager.mark_selected_card_as_sold(card, actual_p):
+                                            st.success("Vendu !")
+                                            st.rerun()
+                                        else:
+                                            st.error("Cette fiche a changé : recharge les données avant de réessayer.")
+
+            # ---------------------------------------------------------------
+            # MODE 2 : TABLEAU ÉPURÉ ET FICHE DÉTAILLÉE
+            # ---------------------------------------------------------------
+            else:
+                df = pd.DataFrame(filtered_cards)
+                df["popularity"] = [
+                    stock_advisor.popularity_badge(popularity_by_card.get(str(card.get("scryfall_id"))))
+                    for card in filtered_cards
+                ]
+                display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "selling_price", "liquidity_rating", "popularity"]
+                if target_status == "SOLD":
+                    display_cols.extend(["actual_sale_price", "date_sold"])
+
+                column_config = {
+                    "name": st.column_config.TextColumn("Nom de la carte"),
+                    "set_code": st.column_config.TextColumn("Édition", width="small"),
+                    "quantity": st.column_config.NumberColumn("Qté", format="%d", width="small"),
+                    "condition": st.column_config.TextColumn("État", width="small"),
+                    "language": st.column_config.TextColumn("Langue", width="small"),
+                    "foil": st.column_config.CheckboxColumn("Foil", width="small"),
+                    "purchase_price": st.column_config.NumberColumn("Prix d'Achat", format="%.2f €"),
+                    "selling_price": st.column_config.NumberColumn("Prix Vente Fixé", format="%.2f €"),
+                    "liquidity_rating": st.column_config.TextColumn("Liquidité", width="small"),
+                    "popularity": st.column_config.TextColumn("Popularité 30 j", width="small"),
+                    "actual_sale_price": st.column_config.NumberColumn("Prix Vente Réel", format="%.2f €"),
+                    "date_sold": st.column_config.TextColumn("Date de Vente")
+                }
+
+                st.dataframe(
+                    df.reindex(columns=display_cols),
+                    column_config=column_config,
+                    width="stretch",
+                    hide_index=True
+                )
+
+                st.subheader("Détail & Actions sur une carte")
+                card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['selling_price']}€" for c in filtered_cards]
+                selected_idx = st.selectbox("Sélectionner une carte :", range(len(card_names)), format_func=lambda x: card_names[x])
+
+                if selected_idx is not None:
+                    card = filtered_cards[selected_idx]
+                    col_img, col_info = st.columns([1, 2])
+
+                    scryfall_data = None
+                    if card.get("name") and not card.get("scryfall_resolution_pending") and (
+                        not card.get("image_url") or not card.get("mana_cost")
+                        or not card.get("type_line") or not card.get("oracle_text")
                     ):
-                        st.toast("Modifications enregistrées", icon="✅")
-                    else:
-                        st.toast("Carte modifiée ailleurs : données rechargées, réessaie.", icon="⚠️")
-                    st.rerun()
+                        scryfall_data = data_manager.get_scryfall_card(card["name"])
 
-        if not filtered_cards:
-            st.info("Aucune carte ne correspond à ces filtres.")
-        
-        # ---------------------------------------------------------------
-        # MODE 1 : GALERIE VISUELLE (TUILES DYNAMIQUES)
-        # ---------------------------------------------------------------
-        elif view_mode == "Galerie":
-            cols_per_row = 3
-            cols = st.columns(cols_per_row)
+                    with col_img:
+                        img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
+                        if not img_url and scryfall_data:
+                            img_url = scryfall_data.get("image_uris", {}).get("normal")
+                            if not img_url and "card_faces" in scryfall_data:
+                                img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
 
-            for idx, card in enumerate(filtered_cards):
-                original_index = indexed_cards[idx][0]
-                scryfall_data = None
-                if card.get("name") and not card.get("scryfall_resolution_pending") and not card.get("image_url"):
-                    scryfall_data = data_manager.get_scryfall_card(card["name"])
-                img_url = card.get("image_url") or (scryfall_data.get("image_uris", {}).get("normal") if scryfall_data else None)
-                if not img_url and scryfall_data and "card_faces" in scryfall_data:
-                    img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
-
-                with cols[idx % cols_per_row]:
-                    with st.container(border=True):
                         if img_url:
                             st.image(img_url, width="stretch")
                         else:
-                            st.write("🖼️ *Image non disponible*")
+                            st.warning("🖼️ Image non disponible")
 
+                    with col_info:
                         mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
+                        type_line = card.get("type_line") or (scryfall_data.get("type_line") if scryfall_data else "Type inconnu")
+                        oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
+                        legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
+
                         mana_html = render_mana_cost_html(mana_cost)
-                        st.markdown(f"**{card['name']}** {mana_html}", unsafe_allow_html=True)
-
-                        quantity = int(card.get("quantity", 1))
-                        st.markdown(
-                            f"<div class='card-meta'>`{card['set_code'].upper()}` · N° {card.get('collector_number', 'N/A')} · {card.get('condition', 'NM')} · {card.get('language', 'FR')} · Qté {quantity}{' · Foil' if card.get('foil') else ''}</div>",
-                            unsafe_allow_html=True
-                        )
-
-                        s_price = card.get("selling_price", 0.0)
-                        st.markdown(f"Prix de vente : **{s_price:.2f} €**")
-                        st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
-                            popularity_by_card.get(str(card.get("scryfall_id")))
-                        ))
-                        if target_status == "FOR_SALE" and card.get("scryfall_id"):
-                            with st.popover("Vendre", use_container_width=True):
-                                actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{original_index}")
-                                if st.button("Confirmer", key=f"btn_{card['scryfall_id']}_{original_index}", type="primary"):
-                                    if data_manager.mark_selected_card_as_sold(card, actual_p):
-                                        st.success("Vendu !")
-                                        st.rerun()
-                                    else:
-                                        st.error("Cette fiche a changé : recharge les données avant de réessayer.")
-
-        # ---------------------------------------------------------------
-        # MODE 2 : TABLEAU ÉPURÉ ET FICHE DÉTAILLÉE
-        # ---------------------------------------------------------------
-        else:
-            df = pd.DataFrame(filtered_cards)
-            df["popularity"] = [
-                stock_advisor.popularity_badge(popularity_by_card.get(str(card.get("scryfall_id"))))
-                for card in filtered_cards
-            ]
-            display_cols = ["name", "set_code", "quantity", "condition", "language", "foil", "selling_price", "liquidity_rating", "popularity"]
-            if target_status == "SOLD":
-                display_cols.extend(["actual_sale_price", "date_sold"])
-
-            column_config = {
-                "name": st.column_config.TextColumn("Nom de la carte"),
-                "set_code": st.column_config.TextColumn("Édition", width="small"),
-                "quantity": st.column_config.NumberColumn("Qté", format="%d", width="small"),
-                "condition": st.column_config.TextColumn("État", width="small"),
-                "language": st.column_config.TextColumn("Langue", width="small"),
-                "foil": st.column_config.CheckboxColumn("Foil", width="small"),
-                "purchase_price": st.column_config.NumberColumn("Prix d'Achat", format="%.2f €"),
-                "selling_price": st.column_config.NumberColumn("Prix Vente Fixé", format="%.2f €"),
-                "liquidity_rating": st.column_config.TextColumn("Liquidité", width="small"),
-                "popularity": st.column_config.TextColumn("Popularité 30 j", width="small"),
-                "actual_sale_price": st.column_config.NumberColumn("Prix Vente Réel", format="%.2f €"),
-                "date_sold": st.column_config.TextColumn("Date de Vente")
-            }
-
-            st.dataframe(
-                df.reindex(columns=display_cols),
-                column_config=column_config,
-                width="stretch",
-                hide_index=True
-            )
-
-            st.subheader("Détail & Actions sur une carte")
-            card_names = [f"{c['name']} ({c['set_code'].upper()}) - {c['selling_price']}€" for c in filtered_cards]
-            selected_idx = st.selectbox("Sélectionner une carte :", range(len(card_names)), format_func=lambda x: card_names[x])
-
-            if selected_idx is not None:
-                card = filtered_cards[selected_idx]
-                col_img, col_info = st.columns([1, 2])
-
-                scryfall_data = None
-                if card.get("name") and not card.get("scryfall_resolution_pending") and (
-                    not card.get("image_url") or not card.get("mana_cost")
-                    or not card.get("type_line") or not card.get("oracle_text")
-                ):
-                    scryfall_data = data_manager.get_scryfall_card(card["name"])
-
-                with col_img:
-                    img_url = card.get("image_url") or card.get("image_uris", {}).get("normal")
-                    if not img_url and scryfall_data:
-                        img_url = scryfall_data.get("image_uris", {}).get("normal")
-                        if not img_url and "card_faces" in scryfall_data:
-                            img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
-
-                    if img_url:
-                        st.image(img_url, width="stretch")
-                    else:
-                        st.warning("🖼️ Image non disponible")
-
-                with col_info:
-                    mana_cost = card.get("mana_cost") or (scryfall_data.get("mana_cost") if scryfall_data else "")
-                    type_line = card.get("type_line") or (scryfall_data.get("type_line") if scryfall_data else "Type inconnu")
-                    oracle_text = card.get("oracle_text") or (scryfall_data.get("oracle_text") if scryfall_data else "Aucun texte d'effet disponible.")
-                    legalities = card.get("legalities") or (scryfall_data.get("legalities") if scryfall_data else {})
-
-                    mana_html = render_mana_cost_html(mana_cost)
-                    st.markdown(f"### ** {mana_html}", unsafe_allow_html=True)
-                    st.markdown(f"*{type_line}*")
-                    st.divider()
-
-                    st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")
-
-                    st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
-                    st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
-                    st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
-
-                    if legalities:
-                        st.markdown("#### **Légalités en Format**")
-                        leg_cols = st.columns(2)
-                        formats = ["standard", "pioneer", "modern", "legacy", "vintage", "commander"]
-                        for idx, fmt in enumerate(formats):
-                            status = legalities.get(fmt, "not_legal")
-                            badge = "🟢 **LEGAL**" if status == "legal" else "⚪ **NOT LEGAL**"
-                            leg_cols[idx % 2].markdown(f"{badge} `{fmt.capitalize()}`")
-
-                    if target_status == "FOR_SALE" and card.get("scryfall_id"):
+                        st.markdown(f"### ** {mana_html}", unsafe_allow_html=True)
+                        st.markdown(f"*{type_line}*")
                         st.divider()
-                        st.subheader("Marquer comme vendue")
-                        sale_price = st.number_input(
-                            "Prix réel de vente (€) :",
-                            min_value=0.0,
-                            value=float(card['selling_price']),
-                            step=0.5
-                        )
-                        if st.button("Confirmer la vente", type="primary"):
-                            if data_manager.mark_selected_card_as_sold(card, sale_price):
-                                st.success("Carte enregistrée comme vendue !")
-                                st.rerun()
-                            else:
-                                st.error("Erreur lors de la mise à jour.")
 
-                    st.divider()
-                    st.subheader("Journal de décision")
-                    with st.form(f"decision_journal_{selected_idx}_{card.get('scryfall_id')}"):
-                        decision_type = st.selectbox(
-                            "Décision",
-                            ["Conserver", "Achat", "Vendre", "Vente réalisée"],
-                            index=0,
-                        )
-                        decision_horizon = st.text_input(
-                            "Horizon ou objectif", placeholder="Ex. jusqu'à la prochaine extension"
-                        )
-                        decision_notes = st.text_area(
-                            "Pourquoi cette décision ?", placeholder="Thèse d'achat, raison de conserver ou de vendre…"
-                        )
-                        save_decision = st.form_submit_button("Ajouter au journal")
-                    if save_decision:
-                        try:
-                            if data_manager.record_decision(
-                                card, decision_type, decision_notes, decision_horizon
-                            ):
-                                st.success("Décision ajoutée au journal.")
-                                st.rerun()
-                            else:
-                                st.warning("Cette fiche a changé depuis son affichage. Recharge la page et réessaie.")
-                        except ValueError as error:
-                            st.error(str(error))
-                    journal = card.get("decision_journal", [])
-                    if journal:
-                        for item in reversed(journal):
-                            st.markdown(
-                                f"**{item.get('created_at', '')[:10]} · {item.get('decision', '')}**"
-                                + (f" · {item['horizon']}" if item.get("horizon") else "")
-                                + f"\n\n{item.get('notes', '')}"
+                        st.markdown(f"> **Texte Oracle :**\n> {oracle_text}")
+
+                        st.write(f"**Édition :** `{card['set_code'].upper()}` | **N° :** {card.get('collector_number', 'N/A')}")
+                        st.write(f"**État :** {card.get('condition', 'N/A')} | **Langue :** {card.get('language', 'N/A')} | **Foil :** {'Oui' if card.get('foil') else 'Non'}")
+                        st.write(f"Prix de Vente Fixé : {card['selling_price']:.2f} €")
+
+                        if legalities:
+                            st.markdown("#### **Légalités en Format**")
+                            leg_cols = st.columns(2)
+                            formats = ["standard", "pioneer", "modern", "legacy", "vintage", "commander"]
+                            for idx, fmt in enumerate(formats):
+                                status = legalities.get(fmt, "not_legal")
+                                badge = "🟢 **LEGAL**" if status == "legal" else "⚪ **NOT LEGAL**"
+                                leg_cols[idx % 2].markdown(f"{badge} `{fmt.capitalize()}`")
+
+                        if target_status == "FOR_SALE" and card.get("scryfall_id"):
+                            st.divider()
+                            st.subheader("Marquer comme vendue")
+                            sale_price = st.number_input(
+                                "Prix réel de vente (€) :",
+                                min_value=0.0,
+                                value=float(card['selling_price']),
+                                step=0.5
                             )
+                            if st.button("Confirmer la vente", type="primary"):
+                                if data_manager.mark_selected_card_as_sold(card, sale_price):
+                                    st.success("Carte enregistrée comme vendue !")
+                                    st.rerun()
+                                else:
+                                    st.error("Erreur lors de la mise à jour.")
 
-                # Historique de prix
-                price_hist = data_manager.get_variant_price_history(
-                    card["scryfall_id"], foil=card.get("foil", False)
-                )
-                if price_hist:
-                    df_hist = price_history_frame(price_hist)
-                    fig = px.line(
-                        df_hist.sort_values("Date"), x="Date", y="price_eur",
-                        title="Historique des relevés Scryfall",
-                        labels={"price_eur": "Prix (€)"},
+                        st.divider()
+                        st.subheader("Journal de décision")
+                        with st.form(f"decision_journal_{selected_idx}_{card.get('scryfall_id')}"):
+                            decision_type = st.selectbox(
+                                "Décision",
+                                ["Conserver", "Achat", "Vendre", "Vente réalisée"],
+                                index=0,
+                            )
+                            decision_horizon = st.text_input(
+                                "Horizon ou objectif", placeholder="Ex. jusqu'à la prochaine extension"
+                            )
+                            decision_notes = st.text_area(
+                                "Pourquoi cette décision ?", placeholder="Thèse d'achat, raison de conserver ou de vendre…"
+                            )
+                            save_decision = st.form_submit_button("Ajouter au journal")
+                        if save_decision:
+                            try:
+                                if data_manager.record_decision(
+                                    card, decision_type, decision_notes, decision_horizon
+                                ):
+                                    st.success("Décision ajoutée au journal.")
+                                    st.rerun()
+                                else:
+                                    st.warning("Cette fiche a changé depuis son affichage. Recharge la page et réessaie.")
+                            except ValueError as error:
+                                st.error(str(error))
+                        journal = card.get("decision_journal", [])
+                        if journal:
+                            for item in reversed(journal):
+                                st.markdown(
+                                    f"**{item.get('created_at', '')[:10]} · {item.get('decision', '')}**"
+                                    + (f" · {item['horizon']}" if item.get("horizon") else "")
+                                    + f"\n\n{item.get('notes', '')}"
+                                )
+
+                    # Historique de prix
+                    price_hist = data_manager.get_variant_price_history(
+                        card["scryfall_id"], foil=card.get("foil", False)
                     )
-                    st.plotly_chart(fig, width="stretch")
-
-        st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-        with st.popover("Export / Import", use_container_width=False):
-            export_json, export_csv = st.columns(2)
-            collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
-            active_collection = [
-                card for card in collection if card.get("status", "FOR_SALE") == "FOR_SALE"
-            ]
-            collection_csv = pd.DataFrame(active_collection).to_csv(index=False).encode("utf-8-sig")
-
-            with export_json:
-                st.download_button(
-                    "JSON",
-                    data=collection_json,
-                    file_name="collection.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
-            with export_csv:
-                st.download_button(
-                    "CSV du stock en vente",
-                    data=collection_csv,
-                    file_name="stock.csv",
-                    mime="text/csv",
-                    disabled=not active_collection,
-                    help="Export de l'application, distinct de l'export Cardmarket nécessaire à la synchronisation.",
-                    use_container_width=True
-                )
-
-            st.divider()
-            uploaded_collection = st.file_uploader(
-                "Choisir une sauvegarde collection.json",
-                type=["json"],
-                help="La restauration remplacera intégralement le stock actuel.",
-                label_visibility="collapsed"
-            )
-
-            if uploaded_collection is not None:
-                uploaded_bytes = uploaded_collection.getvalue()
-                try:
-                    restored_collection = json.loads(uploaded_bytes.decode("utf-8-sig"))
-                    if not data_manager.is_valid_collection(restored_collection):
-                        raise ValueError(
-                            "Le fichier doit contenir une liste de cartes avec les champs "
-                            "scryfall_id, name, set_code, purchase_price et selling_price."
+                    if price_hist:
+                        df_hist = price_history_frame(price_hist)
+                        fig = px.line(
+                            df_hist.sort_values("Date"), x="Date", y="price_eur",
+                            title="Historique des relevés Scryfall",
+                            labels={"price_eur": "Prix (€)"},
                         )
-                except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
-                    st.error(f"Fichier de sauvegarde invalide : {e}")
-                else:
-                    st.warning(
-                        f"Cette opération remplacera les {len(collection)} carte(s) actuelles "
-                        f"par {len(restored_collection)} carte(s)."
+                        st.plotly_chart(fig, width="stretch")
+
+            st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+            with st.popover("Export / Import", use_container_width=False):
+                export_json, export_csv = st.columns(2)
+                collection_json = json.dumps(collection, ensure_ascii=False, indent=2)
+                active_collection = [
+                    card for card in collection if card.get("status", "FOR_SALE") == "FOR_SALE"
+                ]
+                collection_csv = pd.DataFrame(active_collection).to_csv(index=False).encode("utf-8-sig")
+
+                with export_json:
+                    st.download_button(
+                        "JSON",
+                        data=collection_json,
+                        file_name="collection.json",
+                        mime="application/json",
+                        use_container_width=True
                     )
-                    upload_hash = hashlib.sha256(uploaded_bytes).hexdigest()[:12]
-                    confirmed = st.checkbox(
-                        "Je confirme le remplacement complet du stock.",
-                        key=f"confirm_collection_restore_{upload_hash}"
+                with export_csv:
+                    st.download_button(
+                        "CSV du stock en vente",
+                        data=collection_csv,
+                        file_name="stock.csv",
+                        mime="text/csv",
+                        disabled=not active_collection,
+                        help="Export de l'application, distinct de l'export Cardmarket nécessaire à la synchronisation.",
+                        use_container_width=True
                     )
-                    if st.button(
-                        "Restaurer cette sauvegarde",
-                        type="primary",
-                        disabled=not confirmed
-                    ):
-                        if data_manager.replace_collection(restored_collection):
-                            st.success("Le stock a été restauré.")
-                            st.rerun()
-                        else:
-                            st.error("La restauration a échoué ; le stock actuel est inchangé.")
+
+                st.divider()
+                uploaded_collection = st.file_uploader(
+                    "Choisir une sauvegarde collection.json",
+                    type=["json"],
+                    help="La restauration remplacera intégralement le stock actuel.",
+                    label_visibility="collapsed"
+                )
+
+                if uploaded_collection is not None:
+                    uploaded_bytes = uploaded_collection.getvalue()
+                    try:
+                        restored_collection = json.loads(uploaded_bytes.decode("utf-8-sig"))
+                        if not data_manager.is_valid_collection(restored_collection):
+                            raise ValueError(
+                                "Le fichier doit contenir une liste de cartes avec les champs "
+                                "scryfall_id, name, set_code, purchase_price et selling_price."
+                            )
+                    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as e:
+                        st.error(f"Fichier de sauvegarde invalide : {e}")
+                    else:
+                        st.warning(
+                            f"Cette opération remplacera les {len(collection)} carte(s) actuelles "
+                            f"par {len(restored_collection)} carte(s)."
+                        )
+                        upload_hash = hashlib.sha256(uploaded_bytes).hexdigest()[:12]
+                        confirmed = st.checkbox(
+                            "Je confirme le remplacement complet du stock.",
+                            key=f"confirm_collection_restore_{upload_hash}"
+                        )
+                        if st.button(
+                            "Restaurer cette sauvegarde",
+                            type="primary",
+                            disabled=not confirmed
+                        ):
+                            if data_manager.replace_collection(restored_collection):
+                                st.success("Le stock a été restauré.")
+                                st.rerun()
+                            else:
+                                st.error("La restauration a échoué ; le stock actuel est inchangé.")
 
 # ===================================================================
 # TAB 2 : RECHERCHE & AJOUT DE CARTES
 # ===================================================================
-with tab_search:
-    st.header("Rechercher et Ajouter une carte")
+if active_tab is None or active_tab == "Recherche & Ajout":
+    with tab_search:
+        st.header("Rechercher et Ajouter une carte")
 
-    with st.expander("Synchroniser mon stock Cardmarket (CSV complet)"):
-        st.caption(
-            "Exporte ton stock depuis Cardmarket puis dépose le fichier ici. Après contrôle et confirmation, "
-            "le fichier remplace les cartes en vente ; les ventes et l'historique restent conservés. "
-            "Les cartes retirées ne sont pas déclarées vendues."
-        )
-        cardmarket_file = st.file_uploader(
-            "Export complet Cardmarket", type=["csv"], key="cardmarket_sync_file"
-        )
-        if cardmarket_file is not None:
-            file_bytes = cardmarket_file.getvalue()
-            file_hash = hashlib.sha256(file_bytes).hexdigest()
-            prepared = st.session_state.get("cardmarket_sync_prepared")
-            if prepared and prepared["hash"] != file_hash:
-                st.session_state.pop("cardmarket_sync_prepared", None)
-                prepared = None
-            if st.button("Vérifier et préparer le stock Cardmarket", key="prepare_cardmarket_sync"):
-                st.session_state.pop("cardmarket_sync_prepared", None)
-                prepared = None
-                try:
-                    rows = cardmarket_import.parse(file_bytes.decode("utf-8-sig"))
-                    with st.spinner(f"Identification de {len(rows)} ligne(s) via Scryfall…"):
-                        resolved, errors = cardmarket_import.resolve(
-                            rows, fetch=data_manager.get_cardmarket_product
-                        )
-                    if errors:
-                        for error in errors:
-                            st.error(error)
-                        st.error("Import partiel refusé : le stock n'a pas été modifié.")
-                    else:
-                        prepared = {
-                            "hash": file_hash, "cards": resolved,
-                            "collection": data_manager.get_collection(),
-                        }
-                        st.session_state["cardmarket_sync_prepared"] = prepared
-                except (UnicodeDecodeError, ValueError, RuntimeError) as error:
-                    st.error(f"Préparation impossible : {error}")
-            if prepared:
-                unresolved_cards = [
-                    card for card in prepared["cards"] if card.get("scryfall_resolution_pending")
-                ]
-                if unresolved_cards:
-                    st.warning(
-                        "Sans correspondance Scryfall exacte (pas de suivi de prix ni vente dans l'application) : "
-                        + ", ".join(card["name"] for card in unresolved_cards)
-                        + ". Ces lignes seront conservées avec les données Cardmarket, sans associer une impression au hasard."
-                    )
-                st.dataframe(
-                    [{
-                        "Carte": card["name"], "Édition": card["set_code"].upper(),
-                        "Qté": card["quantity"], "Langue": card["language"],
-                        "État": card["condition"], "Foil": card["foil"],
-                        "Prix de vente (€)": card["selling_price"],
-                        "Scryfall": "Non identifié" if card.get("scryfall_resolution_pending") else "Identifié",
-                    } for card in prepared["cards"]],
-                    hide_index=True, use_container_width=True,
-                )
-                st.warning(
-                    f"{len(prepared['cards'])} ligne(s) préparée(s). "
-                    "Les cartes absentes du fichier seront retirées du stock en vente, sans créer de vente. "
-                    "Les prix de vente et les quantités du fichier seront utilisés pour la valeur du stock."
-                )
-                confirmed = st.checkbox(
-                    "Je confirme que ce fichier contient tout mon stock Cardmarket actuel.",
-                    key=f"confirm_cardmarket_{file_hash}",
-                )
-                if st.button("Remplacer le stock en vente", disabled=not confirmed, type="primary"):
-                    try:
-                        result = data_manager.synchronize_cardmarket_stock(
-                            prepared["cards"], prepared["collection"]
-                        )
-                    except ValueError as error:
-                        st.error(str(error))
-                    else:
-                        st.session_state.pop("cardmarket_sync_prepared", None)
-                        st.session_state["cardmarket_sync_result"] = result
-                        st.rerun()
-        sync_result = st.session_state.pop("cardmarket_sync_result", None)
-        if sync_result:
-            st.success(
-                f"Stock synchronisé : {sync_result['matched']} mise(s) à jour, "
-                f"{sync_result['added']} nouvelle(s) ligne(s), "
-                f"{sync_result['withdrawn']} retirée(s) du stock."
+        with st.expander("Synchroniser mon stock Cardmarket (CSV complet)"):
+            st.caption(
+                "Exporte ton stock depuis Cardmarket puis dépose le fichier ici. Après contrôle et confirmation, "
+                "le fichier remplace les cartes en vente ; les ventes et l'historique restent conservés. "
+                "Les cartes retirées ne sont pas déclarées vendues."
             )
-
-    with st.expander("Importer un CSV générique (tableur…)"):
-        st.caption("Colonnes reconnues : nom, édition, numéro, quantité, prix d'achat, prix de vente, état, langue, foil. Les cartes sont ajoutées au stock sans rien remplacer.")
-        csv_file = st.file_uploader("Fichier CSV", type=["csv"], key="csv_import_file")
-        if csv_file is not None:
-            try:
-                csv_text = csv_file.getvalue().decode("utf-8-sig")
-                if cardmarket_import.is_cardmarket_export(csv_text):
-                    csv_rows = []
-                    csv_errors = [
-                        "Cet export Cardmarket doit être utilisé dans « Synchroniser mon stock Cardmarket "
-                        "(CSV complet) » ci-dessus. L'identification se fait par identifiant produit, "
-                        "sans traduction des noms."
+            cardmarket_file = st.file_uploader(
+                "Export complet Cardmarket", type=["csv"], key="cardmarket_sync_file"
+            )
+            if cardmarket_file is not None:
+                file_bytes = cardmarket_file.getvalue()
+                file_hash = hashlib.sha256(file_bytes).hexdigest()
+                prepared = st.session_state.get("cardmarket_sync_prepared")
+                if prepared and prepared["hash"] != file_hash:
+                    st.session_state.pop("cardmarket_sync_prepared", None)
+                    prepared = None
+                if st.button("Vérifier et préparer le stock Cardmarket", key="prepare_cardmarket_sync"):
+                    st.session_state.pop("cardmarket_sync_prepared", None)
+                    prepared = None
+                    try:
+                        rows = cardmarket_import.parse(file_bytes.decode("utf-8-sig"))
+                        with st.spinner(f"Identification de {len(rows)} ligne(s) via Scryfall…"):
+                            resolved, errors = cardmarket_import.resolve(
+                                rows, fetch=data_manager.get_cardmarket_product
+                            )
+                        if errors:
+                            for error in errors:
+                                st.error(error)
+                            st.error("Import partiel refusé : le stock n'a pas été modifié.")
+                        else:
+                            prepared = {
+                                "hash": file_hash, "cards": resolved,
+                                "collection": data_manager.get_collection(),
+                            }
+                            st.session_state["cardmarket_sync_prepared"] = prepared
+                    except (UnicodeDecodeError, ValueError, RuntimeError) as error:
+                        st.error(f"Préparation impossible : {error}")
+                if prepared:
+                    unresolved_cards = [
+                        card for card in prepared["cards"] if card.get("scryfall_resolution_pending")
                     ]
-                else:
-                    csv_rows, csv_errors = csv_import.parse_csv(csv_text)
-            except UnicodeDecodeError:
-                csv_rows, csv_errors = [], ["Fichier illisible : enregistre-le en UTF-8."]
-            if csv_rows:
-                try:
-                    resolved_cards, resolve_errors = csv_import.resolve(csv_rows)
-                except requests.RequestException as error:
-                    resolved_cards = []
-                    resolve_errors = [f"Scryfall indisponible ({type(error).__name__}) ; import annulé."]
-                csv_errors += resolve_errors
-                if resolved_cards:
-                    st.write(f"{len(resolved_cards)} carte(s) prête(s) à importer :")
+                    if unresolved_cards:
+                        st.warning(
+                            "Sans correspondance Scryfall exacte (pas de suivi de prix ni vente dans l'application) : "
+                            + ", ".join(card["name"] for card in unresolved_cards)
+                            + ". Ces lignes seront conservées avec les données Cardmarket, sans associer une impression au hasard."
+                        )
                     st.dataframe(
-                        [{"Carte": c["name"], "Édition": c["set_code"].upper(), "Qté": c["quantity"],
-                          "Achat": c["purchase_price"], "Vente": c["selling_price"]} for c in resolved_cards],
+                        [{
+                            "Carte": card["name"], "Édition": card["set_code"].upper(),
+                            "Qté": card["quantity"], "Langue": card["language"],
+                            "État": card["condition"], "Foil": card["foil"],
+                            "Prix de vente (€)": card["selling_price"],
+                            "Scryfall": "Non identifié" if card.get("scryfall_resolution_pending") else "Identifié",
+                        } for card in prepared["cards"]],
                         hide_index=True, use_container_width=True,
                     )
-                    if st.button("Importer ces cartes", type="primary", key="csv_import_go"):
-                        added = data_manager.add_cards_to_collection(resolved_cards)
-                        st.success(f"{added} carte(s) ajoutée(s) au stock.")
-                        st.rerun()
-            for message in csv_errors:
-                st.warning(message)
+                    st.warning(
+                        f"{len(prepared['cards'])} ligne(s) préparée(s). "
+                        "Les cartes absentes du fichier seront retirées du stock en vente, sans créer de vente. "
+                        "Les prix de vente et les quantités du fichier seront utilisés pour la valeur du stock."
+                    )
+                    confirmed = st.checkbox(
+                        "Je confirme que ce fichier contient tout mon stock Cardmarket actuel.",
+                        key=f"confirm_cardmarket_{file_hash}",
+                    )
+                    if st.button("Remplacer le stock en vente", disabled=not confirmed, type="primary"):
+                        try:
+                            result = data_manager.synchronize_cardmarket_stock(
+                                prepared["cards"], prepared["collection"]
+                            )
+                        except ValueError as error:
+                            st.error(str(error))
+                        else:
+                            st.session_state.pop("cardmarket_sync_prepared", None)
+                            st.session_state["cardmarket_sync_result"] = result
+                            st.rerun()
+            sync_result = st.session_state.pop("cardmarket_sync_result", None)
+            if sync_result:
+                st.success(
+                    f"Stock synchronisé : {sync_result['matched']} mise(s) à jour, "
+                    f"{sync_result['added']} nouvelle(s) ligne(s), "
+                    f"{sync_result['withdrawn']} retirée(s) du stock."
+                )
 
-    query = st.text_input("Nom de la carte (FR ou EN) :", placeholder="ex: Sheoldred, Raavan, Atraxa...")
+        with st.expander("Importer un CSV générique (tableur…)"):
+            st.caption("Colonnes reconnues : nom, édition, numéro, quantité, prix d'achat, prix de vente, état, langue, foil. Les cartes sont ajoutées au stock sans rien remplacer.")
+            csv_file = st.file_uploader("Fichier CSV", type=["csv"], key="csv_import_file")
+            if csv_file is not None:
+                try:
+                    csv_text = csv_file.getvalue().decode("utf-8-sig")
+                    if cardmarket_import.is_cardmarket_export(csv_text):
+                        csv_rows = []
+                        csv_errors = [
+                            "Cet export Cardmarket doit être utilisé dans « Synchroniser mon stock Cardmarket "
+                            "(CSV complet) » ci-dessus. L'identification se fait par identifiant produit, "
+                            "sans traduction des noms."
+                        ]
+                    else:
+                        csv_rows, csv_errors = csv_import.parse_csv(csv_text)
+                except UnicodeDecodeError:
+                    csv_rows, csv_errors = [], ["Fichier illisible : enregistre-le en UTF-8."]
+                if csv_rows:
+                    try:
+                        resolved_cards, resolve_errors = csv_import.resolve(csv_rows)
+                    except requests.RequestException as error:
+                        resolved_cards = []
+                        resolve_errors = [f"Scryfall indisponible ({type(error).__name__}) ; import annulé."]
+                    csv_errors += resolve_errors
+                    if resolved_cards:
+                        st.write(f"{len(resolved_cards)} carte(s) prête(s) à importer :")
+                        st.dataframe(
+                            [{"Carte": c["name"], "Édition": c["set_code"].upper(), "Qté": c["quantity"],
+                              "Achat": c["purchase_price"], "Vente": c["selling_price"]} for c in resolved_cards],
+                            hide_index=True, use_container_width=True,
+                        )
+                        if st.button("Importer ces cartes", type="primary", key="csv_import_go"):
+                            added = data_manager.add_cards_to_collection(resolved_cards)
+                            st.success(f"{added} carte(s) ajoutée(s) au stock.")
+                            st.rerun()
+                for message in csv_errors:
+                    st.warning(message)
 
-    if query and len(query) >= 2:
-        suggestions = scryfall_for_display(scryfall.search_card_autocomplete, query)
-        if suggestions:
-            selected_name = st.selectbox("Suggestions trouvées :", suggestions)
+        query = st.text_input("Nom de la carte (FR ou EN) :", placeholder="ex: Sheoldred, Raavan, Atraxa...")
 
-            if selected_name:
-                card_data = scryfall_for_display(scryfall.get_card_by_name, selected_name)
-                if card_data:
-                    oracle_id = card_data.get("oracle_id")
-                    prints = scryfall_for_display(scryfall.get_card_prints, oracle_id) if oracle_id else [card_data]
-                    if not prints:
-                        st.warning("Aucune liste d'éditions disponible ; seule la carte trouvée est affichée.")
-                        prints = [card_data]
+        if query and len(query) >= 2:
+            suggestions = scryfall_for_display(scryfall.search_card_autocomplete, query)
+            if suggestions:
+                selected_name = st.selectbox("Suggestions trouvées :", suggestions)
 
-                    print_options = [
-                        f"{p.get('set_name')} ({p.get('set').upper()}) #{p.get('collector_number')}"
-                        for p in prints
-                    ]
-                    selected_print_idx = st.selectbox("Choisir l'édition :", range(len(print_options)), format_func=lambda x: print_options[x])
-                    
-                    selected_card = prints[selected_print_idx]
+                if selected_name:
+                    card_data = scryfall_for_display(scryfall.get_card_by_name, selected_name)
+                    if card_data:
+                        oracle_id = card_data.get("oracle_id")
+                        prints = scryfall_for_display(scryfall.get_card_prints, oracle_id) if oracle_id else [card_data]
+                        if not prints:
+                            st.warning("Aucune liste d'éditions disponible ; seule la carte trouvée est affichée.")
+                            prints = [card_data]
 
-                    col_pic, col_form = st.columns([1, 2])
+                        print_options = [
+                            f"{p.get('set_name')} ({p.get('set').upper()}) #{p.get('collector_number')}"
+                            for p in prints
+                        ]
+                        selected_print_idx = st.selectbox("Choisir l'édition :", range(len(print_options)), format_func=lambda x: print_options[x])
 
-                    with col_pic:
-                        img_url = selected_card.get("image_uris", {}).get("normal")
-                        if not img_url and "card_faces" in selected_card:
-                            img_url = selected_card["card_faces"][0].get("image_uris", {}).get("normal")
-                        
-                        if img_url:
-                            st.image(img_url, width="stretch")
+                        selected_card = prints[selected_print_idx]
 
-                    with col_form:
-                        st.subheader("Prix actuels Cardmarket")
-                        prices = selected_card.get("prices", {})
-                        cm_price = float(prices.get("eur") or 0.0)
-                        cm_foil_price = float(prices.get("eur_foil") or 0.0)
-                        
-                        st.write(f"Prix Normal : **{cm_price:.2f} €** | Prix Foil : **{cm_foil_price:.2f} €**")
+                        col_pic, col_form = st.columns([1, 2])
 
-                        with st.form("add_card_form"):
-                            col_f1, col_f2 = st.columns(2)
-                            quantity = col_f1.number_input("Quantité :", min_value=1, value=1)
-                            condition = col_f2.selectbox("État :", ["NM", "EX", "GD", "LP", "PL", "PO"])
-                            
-                            language = col_f1.selectbox("Langue :", ["FR", "EN", "DE", "IT", "ES", "JP"])
-                            is_foil = col_f2.checkbox("Foil / Brillante")
+                        with col_pic:
+                            img_url = selected_card.get("image_uris", {}).get("normal")
+                            if not img_url and "card_faces" in selected_card:
+                                img_url = selected_card["card_faces"][0].get("image_uris", {}).get("normal")
 
-                            purchase_price = col_f1.number_input("Prix d'achat (€) :", min_value=0.0, value=cm_price, step=0.5)
-                            selling_price = col_f2.number_input("Prix de vente souhaité (€) :", min_value=0.0, value=cm_price, step=0.5)
-                            
-                            liquidity = st.selectbox("Indice de liquidité estimé :", ["FAST", "MEDIUM", "SLOW"])
+                            if img_url:
+                                st.image(img_url, width="stretch")
 
-                            submit = st.form_submit_button("Ajouter à mon stock")
+                        with col_form:
+                            st.subheader("Prix actuels Cardmarket")
+                            prices = selected_card.get("prices", {})
+                            cm_price = float(prices.get("eur") or 0.0)
+                            cm_foil_price = float(prices.get("eur_foil") or 0.0)
 
-                            if submit:
-                                # Extraction des métadonnées enrichies
-                                mana_cost = selected_card.get("mana_cost", "")
-                                if not mana_cost and "card_faces" in selected_card:
-                                    mana_cost = selected_card["card_faces"][0].get("mana_cost", "")
+                            st.write(f"Prix Normal : **{cm_price:.2f} €** | Prix Foil : **{cm_foil_price:.2f} €**")
 
-                                success = data_manager.add_card_to_collection(
-                                    scryfall_id=selected_card["id"],
-                                    name=selected_card["name"],
-                                    set_code=selected_card["set"],
-                                    collector_number=selected_card["collector_number"],
-                                    language=language,
-                                    condition=condition,
-                                    foil=is_foil,
-                                    quantity=quantity,
-                                    purchase_price=purchase_price,
-                                    selling_price=selling_price,
-                                    liquidity_rating=liquidity,
-                                    image_url=img_url or "",
-                                    mana_cost=mana_cost,
-                                    type_line=selected_card.get("type_line", ""),
-                                    oracle_text=selected_card.get("oracle_text", ""),
-                                    legalities=selected_card.get("legalities", {})
-                                )
-                                if success:
-                                    st.success(f"**{selected_card['name']}** enregistrée dans le stock !")
-                                    st.rerun()
-                                else:
-                                    st.error("Erreur lors de l'écriture dans la base du stock.")
+                            with st.form("add_card_form"):
+                                col_f1, col_f2 = st.columns(2)
+                                quantity = col_f1.number_input("Quantité :", min_value=1, value=1)
+                                condition = col_f2.selectbox("État :", ["NM", "EX", "GD", "LP", "PL", "PO"])
+
+                                language = col_f1.selectbox("Langue :", ["FR", "EN", "DE", "IT", "ES", "JP"])
+                                is_foil = col_f2.checkbox("Foil / Brillante")
+
+                                purchase_price = col_f1.number_input("Prix d'achat (€) :", min_value=0.0, value=cm_price, step=0.5)
+                                selling_price = col_f2.number_input("Prix de vente souhaité (€) :", min_value=0.0, value=cm_price, step=0.5)
+
+                                liquidity = st.selectbox("Indice de liquidité estimé :", ["FAST", "MEDIUM", "SLOW"])
+
+                                submit = st.form_submit_button("Ajouter à mon stock")
+
+                                if submit:
+                                    # Extraction des métadonnées enrichies
+                                    mana_cost = selected_card.get("mana_cost", "")
+                                    if not mana_cost and "card_faces" in selected_card:
+                                        mana_cost = selected_card["card_faces"][0].get("mana_cost", "")
+
+                                    success = data_manager.add_card_to_collection(
+                                        scryfall_id=selected_card["id"],
+                                        name=selected_card["name"],
+                                        set_code=selected_card["set"],
+                                        collector_number=selected_card["collector_number"],
+                                        language=language,
+                                        condition=condition,
+                                        foil=is_foil,
+                                        quantity=quantity,
+                                        purchase_price=purchase_price,
+                                        selling_price=selling_price,
+                                        liquidity_rating=liquidity,
+                                        image_url=img_url or "",
+                                        mana_cost=mana_cost,
+                                        type_line=selected_card.get("type_line", ""),
+                                        oracle_text=selected_card.get("oracle_text", ""),
+                                        legalities=selected_card.get("legalities", {})
+                                    )
+                                    if success:
+                                        st.success(f"**{selected_card['name']}** enregistrée dans le stock !")
+                                        st.rerun()
+                                    else:
+                                        st.error("Erreur lors de l'écriture dans la base du stock.")
 
 
 # ===================================================================
 # TAB 3 : PRICE HISTORY AND STOCK ALERTS
 # ===================================================================
-with tab_prices:
-    st.header("Courbes de prix & alertes du stock")
-    st.caption(
-        "Entre deux relevés : alerte de baisse à −10 % ou moins, de hausse à +10 % ou plus, "
-        "et de stagnation entre ces seuils. Une alerte de stagnation par carte et finition "
-        "est envoyée au maximum par jour UTC."
-    )
-
-    action_col, test_col = st.columns(2)
-    if action_col.button("Analyser le stock maintenant", type="primary"):
-        try:
-            st.session_state["phase_one_analysis"] = analyze_stock_prices()
-            data_manager.clear_cache()
-            st.session_state.pop("phase_one_analysis_error", None)
-        except Exception as error:
-            st.session_state["phase_one_analysis_error"] = str(error)
-    with test_col:
-        discord_test_button()
-
-    if st.session_state.get("phase_one_analysis_error"):
-        st.error(f"Analyse impossible : {st.session_state['phase_one_analysis_error']}")
-    analysis = st.session_state.get("phase_one_analysis")
-    if analysis:
-        st.success(
-            f"{analysis['snapshots_written']} relevé(s) ajouté(s), "
-            f"{analysis['alerts_created']} alerte(s) créée(s), "
-            f"{analysis['notifications_sent']} alerte(s) transmise(s) à Discord."
-        )
-        for field, label in (
-            ("untracked", "Sans identifiant Scryfall"),
-            ("missing_prices", "Sans prix de marché disponible"),
-            ("first_observations", "Premier relevé : comparaison possible à la prochaine analyse"),
-        ):
-            names = analysis.get(field, [])
-            if names:
-                st.warning(f"{label} ({len(names)}) : " + ", ".join(names))
-
-    owned_cards = [
-        card for card in data_manager.get_collection()
-        if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("scryfall_id")
-    ]
-    if not owned_cards:
-        st.info("Ajoute des cartes au stock pour commencer à suivre leurs prix.")
-    else:
-        position = st.selectbox(
-            "Carte en stock",
-            range(len(owned_cards)),
-            format_func=lambda index: (
-                f"{owned_cards[index].get('name', 'Carte')} · "
-                f"{owned_cards[index].get('set_code', '').upper()}"
-                f"{' · Foil' if owned_cards[index].get('foil') else ''}"
-            ),
-            key="phase_one_price_card",
-        )
-        selected_card = owned_cards[position]
-        history = data_manager.get_variant_price_history(
-            selected_card["scryfall_id"], foil=selected_card.get("foil", False)
-        )
-        if history:
-            chart_data = price_history_frame(history)
-            figure = px.line(
-                chart_data.sort_values("Date"), x="Date", y="price_eur",
-                markers=True, title=f"{selected_card.get('name', 'Carte')} · prix EUR",
-                labels={"price_eur": "Prix (€)"},
-            )
-            st.plotly_chart(figure, use_container_width=True)
-        else:
-            st.info("Aucun relevé de prix pour cette carte. Lance une analyse pour créer le premier point.")
-
-    price_alerts = data_manager.get_price_alerts()
-    if price_alerts:
-        st.subheader("Alertes du stock")
-        prioritized_alerts = alert_triage.prioritize(
-            price_alerts, data_manager.get_collection(), data_manager.get_price_history()
-        )
-        st.dataframe(
-            [{
-                "Carte": alert.get("card_name"),
-                "Type": alert.get("kind", "PRICE"),
-                "Tendance": {"UP": "Hausse", "DOWN": "Baisse", "STABLE": "Stagnation"}.get(
-                    alert.get("trend"), "—"
-                ),
-                "Priorité": alert["priority"],
-                "Variation": f"{alert['change_pct']:+.1f} %" if "change_pct" in alert else "—",
-                "Prix précédent": f"{alert['previous_price']:.2f} €" if "previous_price" in alert else "—",
-                "Prix actuel": f"{alert['current_price']:.2f} €" if "current_price" in alert else "—",
-                "Impact estimé": f"{alert['impact_eur']:.2f} €" if alert["impact_eur"] is not None else "À évaluer",
-                "Part du stock": f"{alert['portfolio_share_pct']:.1f} %",
-                "Fraîcheur": alert["freshness"],
-                "Fiabilité": alert["reliability"],
-                "Verdict": alert.get("verdict", ""),
-                "État Discord": alert.get("status"),
-                "Date": alert.get("created_at"),
-            } for alert in prioritized_alerts],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-    st.divider()
-    st.subheader("Valeur du stock dans le temps")
-    portfolio_prices = data_manager.get_price_history()
-    history_events = data_manager.get_inventory_events() if portfolio_prices else []
-    if history_events:
+if active_tab is None or active_tab == "Prix & Alertes":
+    with tab_prices:
+        st.header("Courbes de prix & alertes du stock")
         st.caption(
-            f"Mouvements enregistrés depuis le {history_events[0]['occurred_at'][:10]} (UTC). "
-            "Avant cette date, la courbe utilise les quantités et coûts actuels : elle est approximative. "
-            "Les coûts inconnus et les cartes sans prix disponible sont exclus des totaux correspondants."
-        )
-    value_points = portfolio_history.value_series(
-        data_manager.get_collection(), portfolio_prices, history_events
-    )
-    if len(value_points) >= 1:
-        value_frame = pd.DataFrame(value_points).rename(
-            columns={"value": "Valeur marché (€)", "cost": "Capital investi (€)"}
-        )
-        st.plotly_chart(
-            px.line(value_frame, x="date", y=["Valeur marché (€)", "Capital investi (€)"], markers=True,
-                    labels={"date": "Date", "value": "€", "variable": ""}),
-            use_container_width=True,
-        )
-    else:
-        st.info("Pas encore de relevés : lance une analyse pour créer le premier point.")
-
-    st.subheader("Suggestion de prix de vente")
-    min_margin = st.slider("Marge nette minimale souhaitée (%)", 0, 100, 15)
-    price_lines = pricing.suggestions(
-        data_manager.get_collection(), data_manager.get_price_history(), float(min_margin)
-    )
-    if price_lines:
-        st.dataframe(
-            [{
-                "Carte": line["name"] + (" ✨" if line["foil"] else ""),
-                "Achat": f"{line['purchase_price']:.2f} €" if line["purchase_price"] is not None else "Inconnu",
-                "Mon prix": f"{line['selling_price']:.2f} €",
-                "Marché": f"{line['market_price']:.2f} €" if line["market_price"] else "—",
-                "Suggestion": f"{line['suggested']:.2f} €" if line["suggested"] else "—",
-                "Avis": line["label"],
-            } for line in price_lines],
-            hide_index=True, use_container_width=True,
+            "Entre deux relevés : alerte de baisse à −10 % ou moins, de hausse à +10 % ou plus, "
+            "et de stagnation entre ces seuils. Une alerte de stagnation par carte et finition "
+            "est envoyée au maximum par jour UTC."
         )
 
-    st.divider()
-    st.subheader("Actions GitHub")
-    if not github_actions.is_configured():
-        st.info(
-            "Pour activer ces boutons : crée un jeton GitHub (Settings → Developer settings → "
-            "Fine-grained tokens) limité à ce dépôt avec la permission « Actions : Read and write », "
-            "puis ajoute dans les Secrets Streamlit : GITHUB_DISPATCH_TOKEN = \"ton_jeton\"."
+        action_col, test_col = st.columns(2)
+        if action_col.button("Analyser le stock maintenant", type="primary"):
+            try:
+                st.session_state["phase_one_analysis"] = analyze_stock_prices()
+                data_manager.clear_cache()
+                st.session_state.pop("phase_one_analysis_error", None)
+            except Exception as error:
+                st.session_state["phase_one_analysis_error"] = str(error)
+        with test_col:
+            discord_test_button()
+
+        if st.session_state.get("phase_one_analysis_error"):
+            st.error(f"Analyse impossible : {st.session_state['phase_one_analysis_error']}")
+        analysis = st.session_state.get("phase_one_analysis")
+        if analysis:
+            st.success(
+                f"{analysis['snapshots_written']} relevé(s) ajouté(s), "
+                f"{analysis['alerts_created']} alerte(s) créée(s), "
+                f"{analysis['notifications_sent']} alerte(s) transmise(s) à Discord."
+            )
+            for field, label in (
+                ("untracked", "Sans identifiant Scryfall"),
+                ("missing_prices", "Sans prix de marché disponible"),
+                ("first_observations", "Premier relevé : comparaison possible à la prochaine analyse"),
+            ):
+                names = analysis.get(field, [])
+                if names:
+                    st.warning(f"{label} ({len(names)}) : " + ", ".join(names))
+
+        owned_cards = [
+            card for card in data_manager.get_collection()
+            if card.get("status", "FOR_SALE") == "FOR_SALE" and card.get("scryfall_id")
+        ]
+        if not owned_cards:
+            st.info("Ajoute des cartes au stock pour commencer à suivre leurs prix.")
+        else:
+            position = st.selectbox(
+                "Carte en stock",
+                range(len(owned_cards)),
+                format_func=lambda index: (
+                    f"{owned_cards[index].get('name', 'Carte')} · "
+                    f"{owned_cards[index].get('set_code', '').upper()}"
+                    f"{' · Foil' if owned_cards[index].get('foil') else ''}"
+                ),
+                key="phase_one_price_card",
+            )
+            selected_card = owned_cards[position]
+            history = data_manager.get_variant_price_history(
+                selected_card["scryfall_id"], foil=selected_card.get("foil", False)
+            )
+            if history:
+                chart_data = price_history_frame(history)
+                figure = px.line(
+                    chart_data.sort_values("Date"), x="Date", y="price_eur",
+                    markers=True, title=f"{selected_card.get('name', 'Carte')} · prix EUR",
+                    labels={"price_eur": "Prix (€)"},
+                )
+                st.plotly_chart(figure, use_container_width=True)
+            else:
+                st.info("Aucun relevé de prix pour cette carte. Lance une analyse pour créer le premier point.")
+
+        price_alerts = data_manager.get_price_alerts()
+        if price_alerts:
+            st.subheader("Alertes du stock")
+            prioritized_alerts = alert_triage.prioritize(
+                price_alerts, data_manager.get_collection(), data_manager.get_price_history()
+            )
+            st.dataframe(
+                [{
+                    "Carte": alert.get("card_name"),
+                    "Type": alert.get("kind", "PRICE"),
+                    "Tendance": {"UP": "Hausse", "DOWN": "Baisse", "STABLE": "Stagnation"}.get(
+                        alert.get("trend"), "—"
+                    ),
+                    "Priorité": alert["priority"],
+                    "Variation": f"{alert['change_pct']:+.1f} %" if "change_pct" in alert else "—",
+                    "Prix précédent": f"{alert['previous_price']:.2f} €" if "previous_price" in alert else "—",
+                    "Prix actuel": f"{alert['current_price']:.2f} €" if "current_price" in alert else "—",
+                    "Impact estimé": f"{alert['impact_eur']:.2f} €" if alert["impact_eur"] is not None else "À évaluer",
+                    "Part du stock": f"{alert['portfolio_share_pct']:.1f} %",
+                    "Fraîcheur": alert["freshness"],
+                    "Fiabilité": alert["reliability"],
+                    "Verdict": alert.get("verdict", ""),
+                    "État Discord": alert.get("status"),
+                    "Date": alert.get("created_at"),
+                } for alert in prioritized_alerts],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        st.divider()
+        st.subheader("Valeur du stock dans le temps")
+        portfolio_prices = data_manager.get_price_history()
+        history_events = data_manager.get_inventory_events() if portfolio_prices else []
+        if history_events:
+            st.caption(
+                f"Mouvements enregistrés depuis le {history_events[0]['occurred_at'][:10]} (UTC). "
+                "Avant cette date, la courbe utilise les quantités et coûts actuels : elle est approximative. "
+                "Les coûts inconnus et les cartes sans prix disponible sont exclus des totaux correspondants."
+            )
+        value_points = portfolio_history.value_series(
+            data_manager.get_collection(), portfolio_prices, history_events
         )
-    for workflow_file, workflow_label in github_actions.WORKFLOWS.items():
-        label_col, button_col, status_col = st.columns([2, 2, 3])
-        label_col.write(workflow_label)
-        if button_col.button("Lancer", key=f"gh_run_{workflow_file}", disabled=not github_actions.is_configured()):
-            try:
-                github_actions.trigger(workflow_file)
-                github_latest_run.clear()
-                st.session_state[f"gh_msg_{workflow_file}"] = "Lancé sur GitHub (démarre dans quelques secondes)."
-            except github_actions.GitHubActionsError as error:
-                st.session_state[f"gh_msg_{workflow_file}"] = f"Erreur : {error}"
-        if github_actions.is_configured():
-            try:
-                status_col.write(github_actions.run_label(github_latest_run(workflow_file)))
-            except github_actions.GitHubActionsError as error:
-                status_col.write(f"Statut indisponible : {error}")
-        message = st.session_state.get(f"gh_msg_{workflow_file}")
-        if message:
-            st.caption(message)
+        if len(value_points) >= 1:
+            value_frame = pd.DataFrame(value_points).rename(
+                columns={"value": "Valeur marché (€)", "cost": "Capital investi (€)"}
+            )
+            st.plotly_chart(
+                px.line(value_frame, x="date", y=["Valeur marché (€)", "Capital investi (€)"], markers=True,
+                        labels={"date": "Date", "value": "€", "variable": ""}),
+                use_container_width=True,
+            )
+        else:
+            st.info("Pas encore de relevés : lance une analyse pour créer le premier point.")
+
+        st.subheader("Suggestion de prix de vente")
+        min_margin = st.slider("Marge nette minimale souhaitée (%)", 0, 100, 15)
+        price_lines = pricing.suggestions(
+            data_manager.get_collection(), data_manager.get_price_history(), float(min_margin)
+        )
+        if price_lines:
+            st.dataframe(
+                [{
+                    "Carte": line["name"] + (" ✨" if line["foil"] else ""),
+                    "Achat": f"{line['purchase_price']:.2f} €" if line["purchase_price"] is not None else "Inconnu",
+                    "Mon prix": f"{line['selling_price']:.2f} €",
+                    "Marché": f"{line['market_price']:.2f} €" if line["market_price"] else "—",
+                    "Suggestion": f"{line['suggested']:.2f} €" if line["suggested"] else "—",
+                    "Avis": line["label"],
+                } for line in price_lines],
+                hide_index=True, use_container_width=True,
+            )
+
+        st.divider()
+        st.subheader("Actions GitHub")
+        if not github_actions.is_configured():
+            st.info(
+                "Pour activer ces boutons : crée un jeton GitHub (Settings → Developer settings → "
+                "Fine-grained tokens) limité à ce dépôt avec la permission « Actions : Read and write », "
+                "puis ajoute dans les Secrets Streamlit : GITHUB_DISPATCH_TOKEN = \"ton_jeton\"."
+            )
+        for workflow_file, workflow_label in github_actions.WORKFLOWS.items():
+            label_col, button_col, status_col = st.columns([2, 2, 3])
+            label_col.write(workflow_label)
+            if button_col.button("Lancer", key=f"gh_run_{workflow_file}", disabled=not github_actions.is_configured()):
+                try:
+                    github_actions.trigger(workflow_file)
+                    github_latest_run.clear()
+                    st.session_state[f"gh_msg_{workflow_file}"] = "Lancé sur GitHub (démarre dans quelques secondes)."
+                except github_actions.GitHubActionsError as error:
+                    st.session_state[f"gh_msg_{workflow_file}"] = f"Erreur : {error}"
+            if github_actions.is_configured():
+                try:
+                    status_col.write(github_actions.run_label(github_latest_run(workflow_file)))
+                except github_actions.GitHubActionsError as error:
+                    status_col.write(f"Statut indisponible : {error}")
+            message = st.session_state.get(f"gh_msg_{workflow_file}")
+            if message:
+                st.caption(message)
 
 
 # ===================================================================
 # TAB 4 : BILAN DES VENTES
 # ===================================================================
-with tab_sales:
-    st.header("Bilan des ventes")
-    sales_collection = data_manager.get_collection()
-    sold_lines = sales_report.compare_to_market(
-        sales_report.sale_lines(sales_collection), data_manager.get_price_history()
-    )
-    if not sold_lines:
-        st.info("Aucune vente enregistrée pour le moment.")
-    else:
-        total = sales_report.summarize(sold_lines)
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("Cartes vendues", total["cards_sold"])
-        k2.metric("Chiffre d'affaires", f"{total['revenue']:.2f} €")
-        profit = f"{total['net_profit']:+.2f} €" if total["net_profit"] is not None else "—"
-        roi = f"{total['roi_percent']:+.1f} % ROI" if total["roi_percent"] is not None else "ROI indisponible"
-        k3.metric("Bénéfice net", profit, roi)
-        if total["unknown_cost_sales"]:
-            st.warning(
-                f"Bénéfice et ROI partiels : {total['unknown_cost_sales']} vente(s) "
-                "sans prix d'achat connu sont exclues."
-            )
-        k4.metric("Frais Cardmarket", f"{total['fees']:.2f} €")
-        if total["market_compared_sales"]:
-            k5.metric(
-                "Ventes vs référence marché",
-                f"{total['sale_vs_market']:+.2f} €",
-                f"{total['market_compared_sales']} vente(s) comparée(s)",
-                help="Écart au dernier prix Scryfall connu à la date de vente; comparaison indicative.",
-            )
+if active_tab is None or active_tab == "Bilan des ventes":
+    with tab_sales:
+        st.header("Bilan des ventes")
+        sales_collection = data_manager.get_collection()
+        sold_lines = sales_report.compare_to_market(
+            sales_report.sale_lines(sales_collection), data_manager.get_price_history()
+        )
+        if not sold_lines:
+            st.info("Aucune vente enregistrée pour le moment.")
         else:
-            k5.metric("Ventes vs référence marché", "—", "aucun prix historique exploitable")
+            total = sales_report.summarize(sold_lines)
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Cartes vendues", total["cards_sold"])
+            k2.metric("Chiffre d'affaires", f"{total['revenue']:.2f} €")
+            profit = f"{total['net_profit']:+.2f} €" if total["net_profit"] is not None else "—"
+            roi = f"{total['roi_percent']:+.1f} % ROI" if total["roi_percent"] is not None else "ROI indisponible"
+            k3.metric("Bénéfice net", profit, roi)
+            if total["unknown_cost_sales"]:
+                st.warning(
+                    f"Bénéfice et ROI partiels : {total['unknown_cost_sales']} vente(s) "
+                    "sans prix d'achat connu sont exclues."
+                )
+            k4.metric("Frais Cardmarket", f"{total['fees']:.2f} €")
+            if total["market_compared_sales"]:
+                k5.metric(
+                    "Ventes vs référence marché",
+                    f"{total['sale_vs_market']:+.2f} €",
+                    f"{total['market_compared_sales']} vente(s) comparée(s)",
+                    help="Écart au dernier prix Scryfall connu à la date de vente; comparaison indicative.",
+                )
+            else:
+                k5.metric("Ventes vs référence marché", "—", "aucun prix historique exploitable")
 
-        months = sales_report.monthly_summary(data_manager.get_collection())
-        if months:
-            st.subheader("Par mois")
+            months = sales_report.monthly_summary(data_manager.get_collection())
+            if months:
+                st.subheader("Par mois")
+                st.dataframe(
+                    [{
+                        "Mois": m["month"], "Cartes": m["cards_sold"],
+                        "CA (€)": m["revenue"], "Frais (€)": m["fees"],
+                        "Coût (€)": m["cost"], "Bénéfice net (€)": m["net_profit"],
+                        "ROI (%)": m["roi_percent"],
+                    } for m in months],
+                    hide_index=True, width="stretch",
+                )
+                known_months = {m["month"]: m["net_profit"] for m in reversed(months)
+                                if m["net_profit"] is not None}
+                if known_months:
+                    st.bar_chart(known_months, y_label="Bénéfice net (€)")
+
+            st.subheader("Détail des ventes")
             st.dataframe(
                 [{
-                    "Mois": m["month"], "Cartes": m["cards_sold"],
-                    "CA (€)": m["revenue"], "Frais (€)": m["fees"],
-                    "Coût (€)": m["cost"], "Bénéfice net (€)": m["net_profit"],
-                    "ROI (%)": m["roi_percent"],
-                } for m in months],
+                    "Date": line["sold_on"].isoformat() if line["sold_on"] else "—",
+                    "Carte": line["name"], "Édition": line["set_code"], "Qté": line["quantity"],
+                    "CA (€)": round(line["revenue"], 2),
+                    "Bénéfice net (€)": round(line["net_profit"], 2) if line["net_profit"] is not None else None,
+                    "Référence marché (€)": round(line["market_reference"], 2)
+                    if line["market_reference"] is not None else "—",
+                    "Écart vs marché (€)": line["sale_vs_market"]
+                    if line["sale_vs_market"] is not None else "—",
+                    "Date référence": line["market_reference_day"] or "—",
+                } for line in sorted(sold_lines, key=lambda l: l["sold_on"] or date.min, reverse=True)],
                 hide_index=True, width="stretch",
             )
-            known_months = {m["month"]: m["net_profit"] for m in reversed(months)
-                            if m["net_profit"] is not None}
-            if known_months:
-                st.bar_chart(known_months, y_label="Bénéfice net (€)")
-
-        st.subheader("Détail des ventes")
-        st.dataframe(
-            [{
-                "Date": line["sold_on"].isoformat() if line["sold_on"] else "—",
-                "Carte": line["name"], "Édition": line["set_code"], "Qté": line["quantity"],
-                "CA (€)": round(line["revenue"], 2),
-                "Bénéfice net (€)": round(line["net_profit"], 2) if line["net_profit"] is not None else None,
-                "Référence marché (€)": round(line["market_reference"], 2)
-                if line["market_reference"] is not None else "—",
-                "Écart vs marché (€)": line["sale_vs_market"]
-                if line["sale_vs_market"] is not None else "—",
-                "Date référence": line["market_reference_day"] or "—",
-            } for line in sorted(sold_lines, key=lambda l: l["sold_on"] or date.min, reverse=True)],
-            hide_index=True, width="stretch",
-        )
 
 
 # ===================================================================
 # TAB 5 : NEXUS (watchlist, signaux, backtesting, assistant)
 # ===================================================================
-with tab_nexus:
-    try:
-        from modules.nexus_view import render_nexus_tab
-        render_nexus_tab()
-    except Exception as error:
-        st.error(f"L'onglet Nexus est indisponible : {error}")
+if active_tab is None or active_tab == "Nexus":
+    with tab_nexus:
+        try:
+            from modules.nexus_view import render_nexus_tab
+            render_nexus_tab()
+        except Exception as error:
+            st.error(f"L'onglet Nexus est indisponible : {error}")

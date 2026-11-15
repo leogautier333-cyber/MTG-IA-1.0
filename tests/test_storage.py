@@ -41,6 +41,44 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["backend"], "sqlite")
         self.assertEqual(result["table_count"], len(storage.REQUIRED_TABLES))
 
+    def test_missing_legacy_marker_does_not_erase_existing_stock(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        with storage._database() as connection:
+            connection.execute("DELETE FROM metadata WHERE key = 'legacy_json_migrated'")
+        storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
+        self.assertEqual(storage.get_collection(), [card])
+
+    def test_legacy_migration_refuses_nonempty_table_and_corrupt_file(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        with storage._database() as connection:
+            connection.execute("DELETE FROM metadata WHERE key = 'legacy_json_migrated'")
+        path = self.database_path.parent / "collection.json"
+        path.write_text("[]", encoding="utf-8")
+        storage._INITIALIZED_PATHS.discard(str(self.database_path.resolve()))
+        with self.assertRaisesRegex(storage.DatabaseConfigurationError, "non-empty"):
+            storage.initialize_database()
+        path.write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(storage.DatabaseConfigurationError, "Cannot read legacy"):
+            storage.initialize_database()
+        path.unlink()
+        self.assertEqual(storage.get_collection(), [card])
+
+    def test_bulk_empty_or_incomplete_preserves_existing_data(self):
+        cards = [{"id": f"card-{index}", "name": "Card", "set": "tst"}
+                 for index in range(4)]
+        market_data.sync_bulk_prints(cards, synced_at="2026-10-13")
+        for incoming in ([], cards[:1]):
+            with self.subTest(count=len(incoming)):
+                with self.assertRaisesRegex(ValueError, "incomplet"):
+                    market_data.sync_bulk_prints(incoming, synced_at="2026-10-14")
+                with storage._database() as connection:
+                    count = connection.execute("SELECT COUNT(*) AS n FROM bulk_prints").fetchone()["n"]
+                self.assertEqual(count, 4)
+
     def test_legacy_json_is_migrated_and_daily_prices_are_upserted(self):
         legacy_data = {
             "collection.json": [{

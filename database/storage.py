@@ -142,8 +142,12 @@ def _read_json(path, default):
     try:
         with path.open("r", encoding="utf-8") as source:
             return json.load(source)
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return default
+    except (OSError, json.JSONDecodeError) as error:
+        raise DatabaseConfigurationError(
+            f"Cannot read legacy data file {path.name}; migration stopped."
+        ) from error
 
 
 def _serialize(value):
@@ -156,13 +160,21 @@ def _migrate_legacy_data(connection):
     ).fetchone()
     legacy_dir = DATABASE_PATH.parent
     if not migrated:
-        collection = _read_json(legacy_dir / "collection.json", [])
-        watchlist = _read_json(legacy_dir / "watchlist.json", [])
-
-        if isinstance(collection, list):
-            _replace_inventory(connection, collection)
-        if isinstance(watchlist, list):
-            _replace_watchlist(connection, watchlist)
+        collection = _read_json(legacy_dir / "collection.json", None)
+        watchlist = _read_json(legacy_dir / "watchlist.json", None)
+        for table, records, replace in (
+            ("inventory", collection, _replace_inventory),
+            ("watchlist", watchlist, _replace_watchlist),
+        ):
+            if records is None:
+                continue
+            if not isinstance(records, list):
+                raise DatabaseConfigurationError(f"Invalid legacy data for {table}; migration stopped.")
+            if connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"]:
+                raise DatabaseConfigurationError(
+                    f"Cannot migrate legacy {table} into a non-empty table; manual review required."
+                )
+            replace(connection, records)
         connection.execute(
             "INSERT INTO metadata(key, value) VALUES ('legacy_json_migrated', '1')"
         )
@@ -285,6 +297,8 @@ def initialize_database():
         if database_path in _INITIALIZED_PATHS:
             return
         with closing(_connect()) as connection:
+            if database_url:
+                connection.execute("SELECT pg_advisory_xact_lock(?)", (734526418,))
             schema = """
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
@@ -599,13 +613,13 @@ def update_inventory_card(original, quantity, purchase_price, selling_price, tar
                 card["target_price"] = float(target_price)
             else:
                 card.pop("target_price", None)
-            connection.execute(
+            cursor = connection.execute(
                 """UPDATE inventory SET quantity = ?, purchase_price = ?, selling_price = ?,
-                   payload = ? WHERE entry_id = ?""",
+                   payload = ? WHERE entry_id = ? AND payload = ?""",
                 (card["quantity"], card["purchase_price"], card["selling_price"],
-                 _serialize(card), row["entry_id"]),
+                 _serialize(card), row["entry_id"], row["payload"]),
             )
-            return True
+            return cursor.rowcount == 1
     return False
 
 
@@ -626,11 +640,11 @@ def append_inventory_decision(original, decision):
                 continue
             journal = card.setdefault("decision_journal", [])
             journal.append(decision)
-            connection.execute(
-                "UPDATE inventory SET payload = ? WHERE entry_id = ?",
-                (_serialize(card), row["entry_id"]),
+            cursor = connection.execute(
+                "UPDATE inventory SET payload = ? WHERE entry_id = ? AND payload = ?",
+                (_serialize(card), row["entry_id"], row["payload"]),
             )
-            return True
+            return cursor.rowcount == 1
     return False
 
 

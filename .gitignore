@@ -8,3 +8,5 @@ data/*.json
 data/cache/
 .env
 .env.*
+.streamlit/secrets.toml
+export cardmarket/

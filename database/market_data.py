@@ -33,6 +33,7 @@ def sync_bulk_prints(cards, synced_at=None):
         ).fetchone()["count"]
         summary["baseline"] = existing_count == 0
         connection.execute("CREATE TEMP TABLE seen_bulk_prints(scryfall_id TEXT PRIMARY KEY)")
+        seen_count = 0
         for card in cards:
             scryfall_id = card.get("id")
             if not scryfall_id:
@@ -118,6 +119,9 @@ def sync_bulk_prints(cards, synced_at=None):
             connection.execute(
                 "INSERT INTO seen_bulk_prints(scryfall_id) VALUES (?)", (scryfall_id,)
             )
+            seen_count += 1
+        if not seen_count or (existing_count and seen_count * 2 < existing_count):
+            raise ValueError("Flux Bulk vide ou anormalement incomplet ; synchronisation annulée.")
         if not summary["baseline"]:
             connection.execute(
                 "DELETE FROM bulk_prints WHERE scryfall_id NOT IN (SELECT scryfall_id FROM seen_bulk_prints)"

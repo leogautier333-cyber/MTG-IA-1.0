@@ -1,6 +1,7 @@
 """Données de marché Scryfall : impressions (bulk), rang EDHREC, événements, profil de réimpression."""
 import json
 from datetime import date, datetime, timedelta, timezone
+from itertools import islice
 
 from database.storage import _database, _serialize, _store_alert
 
@@ -34,62 +35,99 @@ def sync_bulk_prints(cards, synced_at=None):
         summary["baseline"] = existing_count == 0
         connection.execute("CREATE TEMP TABLE seen_bulk_prints(scryfall_id TEXT PRIMARY KEY)")
         seen_count = 0
-        for card in cards:
-            scryfall_id = card.get("id")
-            if not scryfall_id:
+        iterator = iter(cards)
+        while chunk := list(islice(iterator, 500)):
+            chunk = [card for card in chunk if card.get("id")]
+            if not chunk:
                 continue
-            oracle_id = card.get("oracle_id")
-            legalities = card.get("legalities") or {}
-            prices = card.get("prices") or {}
-            edhrec_rank = _as_optional_int(card.get("edhrec_rank"))
-            old = connection.execute(
-                "SELECT oracle_id, legalities FROM bulk_prints WHERE scryfall_id = ?",
-                (scryfall_id,),
-            ).fetchone()
-            if old:
-                previous_legalities = json.loads(old["legalities"])
-                transitions = {
-                    format_name: {"from": previous_legalities.get(format_name, "not_legal"), "to": status}
-                    for format_name, status in legalities.items()
-                    if previous_legalities.get(format_name, "not_legal") != status
-                }
-                if transitions:
+            ids = list(dict.fromkeys(card["id"] for card in chunk))
+            placeholders = ", ".join("?" for _ in ids)
+            existing = {
+                row["scryfall_id"]: row for row in connection.execute(
+                    f"""SELECT scryfall_id, oracle_id, legalities FROM bulk_prints
+                        WHERE scryfall_id IN ({placeholders})""", ids
+                ).fetchall()
+            }
+            oracle_ids = list({
+                card["oracle_id"] for card in chunk
+                if not summary["baseline"] and card["id"] not in existing and card.get("oracle_id")
+            })
+            tracked_oracles = set(oracle_ids)
+            oracle_counts = {}
+            for start in range(0, len(oracle_ids), 500):
+                group = oracle_ids[start:start + 500]
+                placeholders = ", ".join("?" for _ in group)
+                for row in connection.execute(
+                    f"""SELECT oracle_id, COUNT(*) AS count FROM bulk_prints
+                        WHERE oracle_id IN ({placeholders}) GROUP BY oracle_id""", group
+                ).fetchall():
+                    oracle_counts[row["oracle_id"]] = row["count"]
+            bulk_rows = []
+            demand_rows = []
+            seen_rows = []
+            for card in chunk:
+                scryfall_id = card["id"]
+                oracle_id = card.get("oracle_id")
+                legalities = card.get("legalities") or {}
+                prices = card.get("prices") or {}
+                edhrec_rank = _as_optional_int(card.get("edhrec_rank"))
+                old = existing.get(scryfall_id)
+                if old:
+                    previous_legalities = json.loads(old["legalities"])
+                    transitions = {
+                        format_name: {"from": previous_legalities.get(format_name, "not_legal"), "to": status}
+                        for format_name, status in legalities.items()
+                        if previous_legalities.get(format_name, "not_legal") != status
+                    }
+                    if transitions:
+                        event = {
+                            "scryfall_id": scryfall_id,
+                            "name": card.get("name", "Carte inconnue"),
+                            "set_code": card.get("set", ""),
+                            "transitions": transitions,
+                        }
+                        summary["legality_changes"].append(event)
+                        _store_alert(
+                            connection, f"legality:{scryfall_id}:{synced_at[:10]}",
+                            "LEGALITY_CHANGE", scryfall_id, synced_at, event,
+                        )
+                elif not summary["baseline"]:
                     event = {
                         "scryfall_id": scryfall_id,
+                        "oracle_id": oracle_id,
                         "name": card.get("name", "Carte inconnue"),
                         "set_code": card.get("set", ""),
-                        "transitions": transitions,
+                        "released_at": card.get("released_at"),
                     }
-                    summary["legality_changes"].append(event)
-                    _store_alert(
-                        connection, f"legality:{scryfall_id}:{synced_at[:10]}",
-                        "LEGALITY_CHANGE", scryfall_id, synced_at, event,
-                    )
-            elif not summary["baseline"]:
-                prior_print = connection.execute(
-                    "SELECT 1 FROM bulk_prints WHERE oracle_id = ? LIMIT 1", (oracle_id,)
-                ).fetchone() if oracle_id else None
-                event = {
-                    "scryfall_id": scryfall_id,
-                    "oracle_id": oracle_id,
-                    "name": card.get("name", "Carte inconnue"),
-                    "set_code": card.get("set", ""),
-                    "released_at": card.get("released_at"),
-                }
-                if prior_print:
-                    summary["reprints"].append(event)
-                    _store_alert(
-                        connection, f"reprint:{scryfall_id}",
-                        "REPRINT", scryfall_id, synced_at, event,
-                    )
-                else:
-                    summary["new_cards"].append(event)
-                    _store_alert(
-                        connection, f"new-card:{scryfall_id}",
-                        "NEW_CARD", scryfall_id, synced_at, event,
-                    )
+                    if oracle_id and oracle_counts.get(oracle_id, 0):
+                        summary["reprints"].append(event)
+                        _store_alert(
+                            connection, f"reprint:{scryfall_id}",
+                            "REPRINT", scryfall_id, synced_at, event,
+                        )
+                    else:
+                        summary["new_cards"].append(event)
+                        _store_alert(
+                            connection, f"new-card:{scryfall_id}",
+                            "NEW_CARD", scryfall_id, synced_at, event,
+                        )
+                if old and old["oracle_id"] in tracked_oracles:
+                    oracle_counts[old["oracle_id"]] -= 1
+                if oracle_id in tracked_oracles:
+                    oracle_counts[oracle_id] = oracle_counts.get(oracle_id, 0) + 1
+                bulk_rows.append((
+                    scryfall_id, oracle_id, card.get("name", "Carte inconnue"),
+                    card.get("set", ""), card.get("released_at"),
+                    _serialize(legalities), int(bool(card.get("reserved"))),
+                    _as_optional_price(prices.get("eur")),
+                    _as_optional_price(prices.get("eur_foil")),
+                    edhrec_rank,
+                ))
+                if edhrec_rank is not None:
+                    demand_rows.append((scryfall_id, snapshot_day, edhrec_rank))
+                seen_rows.append((scryfall_id,))
 
-            connection.execute(
+            connection.executemany(
                 """INSERT INTO bulk_prints(
                        scryfall_id, oracle_id, name, set_code, released_at, legalities, reserved,
                        price_eur, price_eur_foil, edhrec_rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -99,27 +137,18 @@ def sync_bulk_prints(cards, synced_at=None):
                        reserved = excluded.reserved, price_eur = excluded.price_eur,
                        price_eur_foil = excluded.price_eur_foil,
                        edhrec_rank = excluded.edhrec_rank""",
-                (
-                    scryfall_id, oracle_id, card.get("name", "Carte inconnue"),
-                    card.get("set", ""), card.get("released_at"),
-                    _serialize(legalities), int(bool(card.get("reserved"))),
-                    _as_optional_price(prices.get("eur")),
-                    _as_optional_price(prices.get("eur_foil")),
-                    edhrec_rank,
-                ),
+                bulk_rows,
             )
-            if edhrec_rank is not None:
-                connection.execute(
+            if demand_rows:
+                connection.executemany(
                     """INSERT INTO card_demand_snapshots(scryfall_id, snapshot_date, edhrec_rank)
                        VALUES (?, ?, ?)
                        ON CONFLICT(scryfall_id, snapshot_date)
                        DO UPDATE SET edhrec_rank = excluded.edhrec_rank""",
-                    (scryfall_id, snapshot_day, edhrec_rank),
+                    demand_rows,
                 )
-            connection.execute(
-                "INSERT INTO seen_bulk_prints(scryfall_id) VALUES (?)", (scryfall_id,)
-            )
-            seen_count += 1
+            connection.executemany("INSERT INTO seen_bulk_prints(scryfall_id) VALUES (?)", seen_rows)
+            seen_count += len(seen_rows)
         if not seen_count or (existing_count and seen_count * 2 < existing_count):
             raise ValueError("Flux Bulk vide ou anormalement incomplet ; synchronisation annulée.")
         if not summary["baseline"]:

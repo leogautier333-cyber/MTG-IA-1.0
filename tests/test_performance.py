@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -88,6 +89,44 @@ class BatchReadTests(unittest.TestCase):
         self.assertEqual(len(histories), 501)
         self.assertEqual(len(points), 501)
         self.assertTrue(all(not history for history in histories.values()))
+
+    def test_bulk_sync_batches_database_operations(self):
+        storage.initialize_database()
+        calls = []
+        original_database = market_data._database
+
+        @contextmanager
+        def intercepted_database():
+            with original_database() as connection:
+                class Proxy:
+                    def execute(self, query, parameters=()):
+                        calls.append("execute")
+                        return connection.execute(query, parameters)
+
+                    def executemany(self, query, parameters):
+                        calls.append("executemany")
+                        return connection.executemany(query, parameters)
+
+                yield Proxy()
+
+        cards = ({"id": f"card-{index}", "oracle_id": f"oracle-{index}", "name": "Card",
+                  "set": "tst", "edhrec_rank": index + 1} for index in range(501))
+        with patch.object(market_data, "_database", intercepted_database):
+            summary = market_data.sync_bulk_prints(cards)
+        self.assertTrue(summary["baseline"])
+        self.assertLessEqual(len(calls), 10)
+
+    def test_bulk_reprint_detection_respects_changes_earlier_in_batch(self):
+        market_data.sync_bulk_prints([
+            {"id": "existing", "oracle_id": "old-oracle", "name": "Card", "set": "tst"}
+        ])
+        summary = market_data.sync_bulk_prints([
+            {"id": "existing", "oracle_id": "new-oracle", "name": "Card", "set": "tst"},
+            {"id": "new", "oracle_id": "old-oracle", "name": "Card", "set": "tst"},
+            {"id": "reprint", "oracle_id": "old-oracle", "name": "Card", "set": "tst"},
+        ])
+        self.assertEqual([card["scryfall_id"] for card in summary["new_cards"]], ["new"])
+        self.assertEqual([card["scryfall_id"] for card in summary["reprints"]], ["reprint"])
 
 
 class DiscordFragmentTests(unittest.TestCase):

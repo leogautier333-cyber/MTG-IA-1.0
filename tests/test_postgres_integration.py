@@ -117,6 +117,18 @@ class PostgresIntegrationTests(unittest.TestCase):
         expected = {key: self.storage.get_variant_price_history(*key) for key in variants}
         self.assertEqual(self.storage.get_variant_price_histories_batch(variants), expected)
 
+    def test_bulk_batches_and_incomplete_stream_rolls_back(self):
+        from database import market_data
+
+        cards = [{"id": f"card-{index}", "oracle_id": f"oracle-{index}", "name": "Card",
+                  "set": "tst", "edhrec_rank": index + 1} for index in range(501)]
+        market_data.sync_bulk_prints(iter(cards))
+        with self.assertRaisesRegex(ValueError, "incomplet"):
+            market_data.sync_bulk_prints(iter(cards[:1]))
+        with self.storage._database() as connection:
+            count = connection.execute("SELECT COUNT(*) AS count FROM bulk_prints").fetchone()["count"]
+        self.assertEqual(count, 501)
+
     def test_analysis_lock_is_shared_between_connections(self):
         from services.phase_one_monitor import _analysis_lock
         with _analysis_lock():

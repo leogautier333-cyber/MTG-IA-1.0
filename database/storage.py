@@ -541,18 +541,25 @@ def synchronize_cardmarket_stock(cards, expected_collection, synced_at):
             raise ValueError("Identifiants Cardmarket en double ; synchronisation refusée.")
         old_variants = counts([card for _, card in active], variant)
         new_variants = counts(cards, variant)
+        active_by_article = {}
+        for entry_id, card in active:
+            article = str(card.get("cardmarket_article_id", ""))
+            if article:
+                active_by_article.setdefault(article, (entry_id, card))
+        manual_by_variant = {
+            variant(card): (entry_id, card)
+            for entry_id, card in active if not card.get("cardmarket_article_id")
+        }
         used = set()
         matched = added = 0
         for incoming in cards:
             article = str(incoming["cardmarket_article_id"])
-            matches = [(entry_id, card) for entry_id, card in active
-                       if str(card.get("cardmarket_article_id", "")) == article]
-            if (not matches and incoming.get("scryfall_id")
+            match = active_by_article.get(article)
+            if (match is None and incoming.get("scryfall_id")
                     and old_variants.get(variant(incoming)) == 1 and new_variants[variant(incoming)] == 1):
-                matches = [(entry_id, card) for entry_id, card in active
-                           if not card.get("cardmarket_article_id") and variant(card) == variant(incoming)]
-            if matches and matches[0][0] not in used:
-                entry_id, current = matches[0]
+                match = manual_by_variant.get(variant(incoming))
+            if match is not None and match[0] not in used:
+                entry_id, current = match
                 if (current.get("cardmarket_product_id")
                         and str(current["cardmarket_product_id"]) != str(incoming["cardmarket_product_id"])):
                     raise ValueError(f"Produit modifié pour l'article {article} ; synchronisation refusée.")

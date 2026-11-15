@@ -120,6 +120,24 @@ class StockSynchronizationTests(unittest.TestCase):
         self.assertEqual(after[2], sold)
         self.assertTrue(after[3]["purchase_price_unknown"])
 
+    def test_large_stock_matches_by_article_in_any_order(self):
+        cards = [
+            {**resolved(str(index), str(index + 1000), f"card-{index}"),
+             "status": "FOR_SALE", "purchase_price": index + 1}
+            for index in range(300)
+        ]
+        inventory.save_collection(cards)
+        before = inventory.get_collection()
+        incoming = [
+            resolved(str(index), str(index + 1000), f"card-{index}", quantity=3)
+            for index in reversed(range(300))
+        ]
+        result = storage.synchronize_cardmarket_stock(incoming, before, "2026-11-12")
+        self.assertEqual(result, {"matched": 300, "added": 0, "withdrawn": 0})
+        after = inventory.get_collection()
+        self.assertEqual([card["purchase_price"] for card in after], list(range(1, 301)))
+        self.assertTrue(all(card["quantity"] == 3 for card in after))
+
     def test_stale_preview_and_duplicate_ids_abort_without_changing_stock(self):
         card = {**resolved(), "status": "FOR_SALE", "purchase_price": 4}
         inventory.save_collection([card])

@@ -20,6 +20,7 @@ Chaque analyse enregistre un relevé par jour et par variante (le dernier relev�
 
 L'analyse regroupe les lectures et écritures SQL par lots : les relevés, rangs et alertes sont enregistrés dans une même transaction. Une erreur pendant cette transaction annule ces écritures. Les journaux du workflow indiquent les durées de veille, préparation/Scryfall, calcul SQL et livraison Discord, sans afficher de secrets.
 Les historiques du rapport hebdomadaire et de l'analyse du portefeuille sont aussi chargés par lots. Les invalidations de cache visent les données applicatives concernées plutôt que toutes les données Streamlit.
+La synchronisation Cardmarket indexe les fiches par article et variante au lieu de reparcourir tout le stock pour chaque ligne.
 
 Une variation strictement comprise entre -10 % et +10 % déclenche une alerte de stagnation : au maximum une par jour UTC et par impression/finition, pour limiter les répétitions. La comparaison est impossible au premier relevé, si l'ancien prix est nul, si Scryfall ne fournit pas de prix ou si la fiche ne possède pas d'identifiant Scryfall ; ces cas sont signalés dans le résultat de l'analyse. La stagnation décrit uniquement l'écart entre deux relevés, pas une tendance prolongée. Avec de nombreuses cartes, les alertes peuvent être nombreuses et certaines rester en attente si Discord refuse temporairement l'envoi.
 

@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from database import market_data, storage
 from services.inventory import calculate_net_margin
+from services.money import decimal_amount
 
 
 CONDITION_DISCOUNTS = {"NM": 0.0, "EX": 0.03, "LP": 0.05, "GD": 0.08, "PL": 0.15, "PO": 0.25}
@@ -83,25 +84,21 @@ def analyze_portfolio(collection, today=None):
     )
     held_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in held_cards)
     sold_unknown_cost = sum(bool(card.get("purchase_price_unknown")) for card in sold_cards)
-    sold_known_cost = sum(
-        float(card.get("purchase_price") or 0) * _quantity(card)
+    sold_known_cost = sum((
+        decimal_amount(card.get("purchase_price") or 0) * _quantity(card)
         for card in sold_cards if not card.get("purchase_price_unknown")
-    )
-    invested = 0.0
-    market_value = 0.0
-    unrealized_profit = 0.0
-    realized_profit = 0.0
-    turnover = 0.0
+    ), Decimal("0"))
+    invested = market_value = unrealized_profit = realized_profit = turnover = Decimal("0")
     holding_days = []
     set_totals = {}
     format_totals = {}
     positions = []
     card_metrics = []
-    liquidity_numerator = 0.0
+    liquidity_numerator = Decimal("0")
 
     for card in collection:
         quantity = _quantity(card)
-        purchase_price = float(card.get("purchase_price") or 0)
+        purchase_price = decimal_amount(card.get("purchase_price") or 0)
         cost_known = not card.get("purchase_price_unknown")
         cost_basis = purchase_price * quantity
         added = _parse_day(card.get("date_added"))
@@ -110,22 +107,22 @@ def analyze_portfolio(collection, today=None):
             holding_days.append(max(0, ((sold or today) - added).days))
 
         if card.get("status") == "FOR_SALE":
-            current_price = _current_price(card, points_by_variant)
+            current_price = decimal_amount(_current_price(card, points_by_variant))
             position_value = current_price * quantity
             position_profit = (current_price - purchase_price) * quantity if cost_known else None
             market_value += position_value
             if cost_known:
                 invested += cost_basis
                 unrealized_profit += position_profit
-            liquidity_numerator += position_value * LIQUIDITY_SCORES.get(
-                str(card.get("liquidity_rating", "MEDIUM")).upper(), 0.5
+            liquidity_numerator += position_value * decimal_amount(
+                LIQUIDITY_SCORES.get(str(card.get("liquidity_rating", "MEDIUM")).upper(), 0.5)
             )
             positions.append({
                 "name": card.get("name", "Carte"),
                 "set_code": card.get("set_code", ""),
-                "market_value": position_value,
-                "unrealized_profit": position_profit,
-                "roi_pct": (current_price - purchase_price) / purchase_price * 100
+                "market_value": float(position_value),
+                "unrealized_profit": float(position_profit) if position_profit is not None else None,
+                "roi_pct": float((current_price - purchase_price) / purchase_price * 100)
                 if cost_known and purchase_price else None,
                 "weight_pct": 0.0,
             })
@@ -134,9 +131,9 @@ def analyze_portfolio(collection, today=None):
                 "name": card.get("name", "Carte"),
                 "set_code": card.get("set_code", ""),
                 "quantity": quantity,
-                "current_price": current_price,
-                "unrealized_profit": position_profit,
-                "roi_pct": (current_price - purchase_price) / purchase_price * 100
+                "current_price": float(current_price),
+                "unrealized_profit": float(position_profit) if position_profit is not None else None,
+                "roi_pct": float((current_price - purchase_price) / purchase_price * 100)
                 if cost_known and purchase_price else None,
             })
             sale = None
@@ -147,8 +144,8 @@ def analyze_portfolio(collection, today=None):
                 condition_discount_pct=0.0,
             )
             if sale["profit_total"] is not None:
-                realized_profit += sale["profit_total"]
-            turnover += float(card.get("actual_sale_price") or 0) * quantity
+                realized_profit += decimal_amount(sale["profit_total"])
+            turnover += decimal_amount(card.get("actual_sale_price") or 0) * quantity
             card_metrics.append({
                 "scryfall_id": card.get("scryfall_id"),
                 "name": card.get("name", "Carte"),
@@ -162,41 +159,43 @@ def analyze_portfolio(collection, today=None):
 
         if not cost_known:
             continue
-        unit_profit = sale["profit_per_card"] if sale else current_price - purchase_price
-        group = set_totals.setdefault(card.get("set_code", "unknown"), {"invested": 0.0, "profit": 0.0})
+        unit_profit = decimal_amount(sale["profit_per_card"]) if sale else current_price - purchase_price
+        group = set_totals.setdefault(card.get("set_code", "unknown"), {"invested": Decimal("0"), "profit": Decimal("0")})
         group["invested"] += cost_basis
         group["profit"] += unit_profit * quantity
         for format_name, legality in (card.get("legalities") or {}).items():
             if legality != "legal":
                 continue
-            format_group = format_totals.setdefault(format_name, {"invested": 0.0, "profit": 0.0})
+            format_group = format_totals.setdefault(format_name, {"invested": Decimal("0"), "profit": Decimal("0")})
             format_group["invested"] += cost_basis
             format_group["profit"] += unit_profit * quantity
 
     positions.sort(key=lambda item: item["market_value"], reverse=True)
     for position in positions:
-        position["weight_pct"] = position["market_value"] / market_value * 100 if market_value else 0.0
-    top_ten_value = sum(position["market_value"] for position in positions[:10])
-    concentration = top_ten_value / market_value * 100 if market_value else 0.0
+        position["weight_pct"] = float(decimal_amount(position["market_value"]) / market_value * 100) if market_value else 0.0
+    top_ten_value = sum((decimal_amount(position["market_value"]) for position in positions[:10]), Decimal("0"))
+    concentration = float(top_ten_value / market_value * 100) if market_value else 0.0
     for grouped in (set_totals, format_totals):
         for values in grouped.values():
-            values["roi_pct"] = values["profit"] / values["invested"] * 100 if values["invested"] else 0.0
+            values["roi_pct"] = float(values["profit"] / values["invested"] * 100) if values["invested"] else 0.0
+            values["invested"] = float(values["invested"])
+            values["profit"] = float(values["profit"])
 
     return {
-        "stock_value": market_value,
-        "invested_capital": invested,
-        "turnover": turnover,
-        "realized_profit": realized_profit,
-        "realized_roi_pct": realized_profit / sold_known_cost * 100 if sold_known_cost else 0.0,
-        "unrealized_profit": unrealized_profit,
-        "unrealized_roi_pct": unrealized_profit / invested * 100 if invested else 0.0,
+        "stock_value": float(market_value),
+        "invested_capital": float(invested),
+        "turnover": float(turnover),
+        "realized_profit": float(realized_profit),
+        "realized_roi_pct": float(realized_profit / sold_known_cost * 100) if sold_known_cost else 0.0,
+        "unrealized_profit": float(unrealized_profit),
+        "unrealized_roi_pct": float(unrealized_profit / invested * 100) if invested else 0.0,
         "for_sale_count": len(held_cards),
         "sold_count": len(sold_cards),
         "held_unknown_cost": held_unknown_cost,
         "sold_unknown_cost": sold_unknown_cost,
         "average_holding_days": sum(holding_days) / len(holding_days) if holding_days else 0.0,
         "top_ten_concentration_pct": concentration,
-        "liquidity_index": liquidity_numerator / market_value * 100 if market_value else 0.0,
+        "liquidity_index": float(liquidity_numerator / market_value * 100) if market_value else 0.0,
         "by_set": set_totals,
         "by_format": format_totals,
         "by_card": card_metrics,

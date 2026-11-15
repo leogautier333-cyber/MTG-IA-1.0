@@ -91,6 +91,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(sale["fee_per_card"], 0.01)
         self.assertEqual(sale["net_per_card"], 0.09)
 
+    def test_portfolio_aggregates_money_without_binary_float_artifacts(self):
+        card = {"scryfall_id": "test", "status": "FOR_SALE", "quantity": 3,
+                "purchase_price": 0.1, "selling_price": 0.2,
+                "set_code": "tst", "legalities": {"commander": "legal"}}
+        result = analyze_portfolio([card])
+        self.assertEqual(result["stock_value"], 0.6)
+        self.assertEqual(result["invested_capital"], 0.3)
+        self.assertEqual(result["unrealized_profit"], 0.3)
+        self.assertEqual(result["by_set"]["tst"]["profit"], 0.3)
+        self.assertEqual(result["top_positions"][0]["weight_pct"], 100)
+
     def test_agent_stock_tools_read_current_inventory(self):
         card = {"scryfall_id": "agent-card", "name": "Agent Card", "set_code": "tst",
                 "status": "FOR_SALE", "purchase_price": 2, "selling_price": 5}

@@ -102,6 +102,8 @@ class PostgresIntegrationTests(unittest.TestCase):
             connection.execute("DROP FUNCTION record_inventory_event()")
             connection.execute("DROP TRIGGER inventory_validation_trigger ON inventory")
             connection.execute("DROP FUNCTION validate_inventory_values()")
+            connection.execute("DROP TRIGGER price_snapshot_validation_trigger ON price_snapshots")
+            connection.execute("DROP FUNCTION validate_price_snapshot()")
             connection.execute("DROP TABLE inventory_events")
             connection.execute("DROP TABLE inventory_history_control")
             connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
@@ -127,6 +129,16 @@ class PostgresIntegrationTests(unittest.TestCase):
                 self.assertEqual(getattr(raised.exception, "sqlstate", None), "P0001")
         self.assertEqual(self.storage.get_collection(), [card])
         self.assertEqual(self.storage.get_inventory_events(), events)
+
+    def test_sql_snapshot_trigger_rejects_invalid_direct_updates(self):
+        from psycopg.errors import RaiseException
+
+        self.storage.record_price_snapshot("test", 2, observed_at="2026-01-01")
+        for price in (-1, float("inf"), float("nan")):
+            with self.subTest(price=price), self.assertRaises(RaiseException):
+                with self.storage._database() as connection:
+                    connection.execute("UPDATE price_snapshots SET price_eur = ?", (price,))
+        self.assertEqual(self.storage.get_price_history()["test"]["2026-01-01"]["eur"], 2)
 
     def test_batch_variant_history_matches_individual_queries(self):
         self.storage.record_price_snapshot(

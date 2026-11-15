@@ -96,6 +96,7 @@ class StorageTests(unittest.TestCase):
                 connection.execute(f"DROP TRIGGER inventory_history_{action}")
             for action in ("insert", "update"):
                 connection.execute(f"DROP TRIGGER inventory_validation_{action}")
+                connection.execute(f"DROP TRIGGER price_snapshot_validation_{action}")
             connection.execute("DROP TABLE inventory_events")
             connection.execute("DROP TABLE inventory_history_control")
             connection.execute("UPDATE metadata SET value = '1' WHERE key = 'schema_version'")
@@ -119,6 +120,15 @@ class StorageTests(unittest.TestCase):
                         connection.execute(f"UPDATE inventory SET {field} = ?", (value,))
         self.assertEqual(storage.get_collection(), [card])
         self.assertEqual(storage.get_inventory_events(), events)
+
+    def test_sql_triggers_reject_invalid_direct_snapshot_writes(self):
+        storage.record_price_snapshot("card", 2, observed_at="2026-01-01")
+        for price in (-1, float("inf")):
+            with self.subTest(price=price):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    with storage._database() as connection:
+                        connection.execute("UPDATE price_snapshots SET price_eur = ?", (price,))
+        self.assertEqual(storage.get_price_history()["card"]["2026-01-01"]["eur"], 2)
 
     def test_failed_inventory_write_and_restore_roll_back_events(self):
         card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",

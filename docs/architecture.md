@@ -7,6 +7,7 @@ Le stock, l'historique de prix et les alertes de variation vivent dans la base S
 La migration refuse un fichier historique illisible ou une importation dans une table déjà remplie ; un fichier absent ne remplace jamais le stock existant. L'initialisation PostgreSQL utilise un verrou partagé entre processus. Une synchronisation Bulk vide ou dont la taille est inférieure à la moitié du catalogue existant est annulée : vérifier la source avant toute intervention manuelle.
 Les évolutions SQL sont numérotées dans `metadata.schema_version` et exécutées sous verrou ; une version plus récente que l'application est refusée. La version 1 couvre l'évolution des colonnes Bulk existantes. La version 2 enregistre transactionnellement les changements de stock avec une copie avant/après, en commençant par un état initial à la migration.
 La version 3 ajoute des triggers de validation des quantités et prix des nouvelles écritures d'inventaire. Elle ne modifie ni ne vérifie rétroactivement les lignes existantes ; une ancienne ligne invalide devra être corrigée avant sa prochaine modification ou restauration.
+La version 4 protège de la même façon les nouvelles écritures de prix dans les relevés ; elle ne modifie pas les relevés déjà stockés.
 Un historique JSON réimporté ne remplace pas un relevé SQL déjà présent. En hébergement, `MTG_REQUIRE_POSTGRES=true` interdit le repli silencieux sur SQLite si l'URL de base est absente.
 
 Organisation du code :
@@ -42,7 +43,7 @@ La courbe du portefeuille reconstitue les quantités et coûts en fin de journé
 Le calcul de marge et les totaux monétaires des tableaux de stock, de ventes, de l'historique et du rapport hebdomadaire utilisent une arithmétique décimale et un arrondi « moitié supérieure » au centime ; l'analyse du portefeuille agrège également les montants en décimal. Une suggestion de prix est arrondie au centime supérieur afin de ne pas passer sous le seuil demandé. Le stockage historique et d'autres calculs restent en nombres flottants ; les calculs décimaux ne restaurent pas une précision déjà perdue au stockage.
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
-Les écritures de stock, ventes et relevés contrôlent les quantités et montants à la frontière applicative : les quantités doivent être entières et strictement positives ; les prix doivent être finis et non négatifs. Les triggers SQL protègent aussi les colonnes de quantité et de prix de l'inventaire contre les écritures directes ; ils ne couvrent pas les champs du payload JSON ni les autres tables.
+Les écritures de stock, ventes et relevés contrôlent les quantités et montants à la frontière applicative : les quantités doivent être entières et strictement positives ; les prix doivent être finis et non négatifs. Les triggers SQL protègent aussi les colonnes de quantité et de prix de l'inventaire et les prix des relevés contre les écritures directes ; ils ne couvrent pas les champs du payload JSON ni les autres tables.
 
 ## Lancer l'application et le suivi
 

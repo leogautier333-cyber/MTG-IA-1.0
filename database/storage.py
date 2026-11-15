@@ -16,7 +16,7 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 REQUIRED_TABLES = frozenset({
     "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
@@ -336,6 +336,38 @@ def _migrate_schema(connection):
             """INSERT INTO metadata(key, value) VALUES ('schema_version', '3')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
         )
+    if version < 4:
+        _create_price_snapshot_validation(connection)
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', '4')
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+
+
+def _create_price_snapshot_validation(connection):
+    if connection.dialect == "postgres":
+        connection.execute("""
+            CREATE FUNCTION validate_price_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.price_eur < 0 OR NEW.price_eur >= 'Infinity'::real THEN
+                    RAISE EXCEPTION 'Invalid snapshot price';
+                END IF;
+                RETURN NEW;
+            END;
+            $$
+        """)
+        connection.execute("""CREATE TRIGGER price_snapshot_validation_trigger
+            BEFORE INSERT OR UPDATE ON price_snapshots
+            FOR EACH ROW EXECUTE FUNCTION validate_price_snapshot()""")
+    else:
+        for action in ("INSERT", "UPDATE"):
+            connection.execute(f"""CREATE TRIGGER price_snapshot_validation_{action.lower()}
+                BEFORE {action} ON price_snapshots
+                WHEN typeof(NEW.price_eur) NOT IN ('integer', 'real')
+                  OR NEW.price_eur < 0 OR NEW.price_eur > 3.4028234663852886e38
+                BEGIN
+                    SELECT RAISE(ABORT, 'Invalid snapshot price');
+                END""")
 
 
 def _create_inventory_validation(connection):

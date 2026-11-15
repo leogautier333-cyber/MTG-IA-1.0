@@ -157,7 +157,11 @@ class DiscordFragmentTests(unittest.TestCase):
         script = """
 from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
-from services import github_actions
+from services import github_actions, inventory
+
+inventory.add_card_to_collection(scryfall_id="sold", name="Sold Card", set_code="tst",
+                                 purchase_price=2, selling_price=5)
+inventory.mark_card_as_sold("sold", 10)
 
 with patch.object(github_actions, "latest_run", return_value=None) as github:
     app = AppTest.from_file("app.py", default_timeout=60).run()
@@ -171,6 +175,8 @@ with patch.object(github_actions, "latest_run", return_value=None) as github:
     app.radio(key="main_navigation").set_value("Bilan des ventes").run()
     assert not app.exception
     assert any("Bilan des ventes" in h.value for h in app.header)
+    assert any(m.label == "Chiffre d'affaires" and m.value == "10.00 €" for m in app.metric)
+    assert any("Détail des ventes" in h.value for h in app.subheader)
     assert github.call_count == 3
     app.radio(key="main_navigation").set_value("Recherche & Ajout").run()
     assert not app.exception

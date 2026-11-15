@@ -15,6 +15,7 @@ Organisation du code :
 - `data_manager.py` : façade Streamlit (lectures en cache 60 s, écritures qui invalident le cache).
 - `services/phase_one_monitor.py` : analyse des prix et alertes Discord.
 - `modules/` et le reste de `services/` : fonctions « Nexus » (watchlist, signaux, backtesting, assistant), affichées dans l'onglet « Nexus » de l'interface.
+- `modules/sales_view.py` : affichage du bilan des ventes, alimenté par les services métier et la façade de lecture.
 - `agents/tools.py` lit le stock par le service métier, sans importer la façade ou le cache Streamlit.
 
 Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les cartes vendues et les cartes qui ne figurent pas dans l'inventaire ne sont jamais demandées à Scryfall par le moniteur de phase 1.

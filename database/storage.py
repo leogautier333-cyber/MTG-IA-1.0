@@ -16,7 +16,7 @@ DATABASE_PATH = Path(os.getenv("MTG_DATABASE_PATH", PROJECT_DATA_DIR / "mtg_mana
 DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("MTG_DATABASE_URL")
 _INITIALIZED_PATHS = set()
 _INITIALIZATION_LOCK = threading.Lock()
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 REQUIRED_TABLES = frozenset({
     "metadata", "inventory", "watchlist", "price_snapshots", "source_health",
@@ -341,6 +341,35 @@ def _migrate_schema(connection):
         connection.execute(
             """INSERT INTO metadata(key, value) VALUES ('schema_version', '4')
                ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+    if version < 5:
+        _widen_postgres_money_columns(connection)
+        connection.execute(
+            """INSERT INTO metadata(key, value) VALUES ('schema_version', '5')
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"""
+        )
+
+
+_MONEY_COLUMNS = (
+    ("inventory", "purchase_price"), ("inventory", "selling_price"),
+    ("price_snapshots", "price_eur"),
+    ("bulk_prints", "price_eur"), ("bulk_prints", "price_eur_foil"),
+    ("alert_evaluations", "reference_price"), ("alert_evaluations", "observed_price"),
+    ("alert_evaluations", "change_pct"),
+)
+
+
+def _widen_postgres_money_columns(connection):
+    """PostgreSQL REAL (4 octets) arrondit les prix ; SQLite REAL a déjà 8 octets.
+
+    La conversion passe par le texte le plus court qui restitue le REAL (PostgreSQL ≥ 12),
+    pour obtenir 19.99 plutôt que 19.989999771118164."""
+    if connection.dialect != "postgres":
+        return
+    for table, column in _MONEY_COLUMNS:
+        connection.execute(
+            f"ALTER TABLE {table} ALTER COLUMN {column} TYPE DOUBLE PRECISION "
+            f"USING {column}::text::double precision"
         )
 
 

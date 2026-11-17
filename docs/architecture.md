@@ -8,6 +8,7 @@ La migration refuse un fichier historique illisible ou une importation dans une 
 Les évolutions SQL sont numérotées dans `metadata.schema_version` et exécutées sous verrou ; une version plus récente que l'application est refusée. La version 1 couvre l'évolution des colonnes Bulk existantes. La version 2 enregistre transactionnellement les changements de stock avec une copie avant/après, en commençant par un état initial à la migration.
 La version 3 ajoute des triggers de validation des quantités et prix des nouvelles écritures d'inventaire. Elle ne modifie ni ne vérifie rétroactivement les lignes existantes ; une ancienne ligne invalide devra être corrigée avant sa prochaine modification ou restauration.
 La version 4 protège de la même façon les nouvelles écritures de prix dans les relevés ; elle ne modifie pas les relevés déjà stockés.
+La version 5 convertit, sur PostgreSQL uniquement, les colonnes de montants `REAL` (4 octets) en `DOUBLE PRECISION` (le `REAL` SQLite a déjà 8 octets). La conversion passe par le texte le plus court du `REAL` pour restituer par exemple 19.99 et non 19.989999771118164 ; une valeur déjà arrondie à la précision 4 octets avant la migration ne peut pas être récupérée au-delà de ce que PostgreSQL restitue. Les montants restent des flottants 8 octets, pas des types décimaux exacts.
 Un historique JSON réimporté ne remplace pas un relevé SQL déjà présent. En hébergement, `MTG_REQUIRE_POSTGRES=true` interdit le repli silencieux sur SQLite si l'URL de base est absente.
 
 Organisation du code :

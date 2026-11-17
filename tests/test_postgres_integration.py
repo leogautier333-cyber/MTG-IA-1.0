@@ -113,6 +113,36 @@ class PostgresIntegrationTests(unittest.TestCase):
         self.assertEqual(len(events), 2)
         self.assertEqual(events[1]["new"], card)
 
+    def test_money_columns_migrate_from_real_without_float4_artifacts(self):
+        self.storage.initialize_database()
+        with self.storage._database() as connection:
+            for table, column in self.storage._MONEY_COLUMNS:
+                connection.execute(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} TYPE REAL USING {column}::real"
+                )
+            connection.execute("UPDATE metadata SET value = '4' WHERE key = 'schema_version'")
+        card = {"scryfall_id": "test", "name": "Test", "set_code": "tst",
+                "purchase_price": 19.99, "selling_price": 12345.67}
+        self.storage.save_collection([card])
+        self.storage.record_price_snapshot("test", 12345.67, observed_at="2026-01-01")
+        with self.storage._database() as connection:
+            stored = connection.execute("SELECT selling_price FROM inventory").fetchone()
+        self.assertNotEqual(stored["selling_price"], 12345.67)
+        self.storage._INITIALIZED_PATHS.discard(self.url)
+        self.assertEqual(self.storage.get_price_history()["test"]["2026-01-01"]["eur"], 12345.67)
+        with self.storage._database() as connection:
+            types = {row["data_type"] for row in connection.execute(
+                """SELECT data_type FROM information_schema.columns
+                   WHERE table_schema = current_schema() AND (table_name, column_name) IN
+                   (('inventory', 'purchase_price'), ('inventory', 'selling_price'),
+                    ('price_snapshots', 'price_eur'), ('bulk_prints', 'price_eur'))"""
+            ).fetchall()}
+            row = connection.execute("SELECT purchase_price, selling_price FROM inventory").fetchone()
+        self.assertEqual(types, {"double precision"})
+        self.assertEqual((row["purchase_price"], row["selling_price"]), (19.99, 12345.67))
+        self.assertEqual(self.storage.get_metadata("schema_version"), "5")
+        self.assertEqual(self.storage.find_inventory_inconsistencies(), [])
+
     def test_sql_validation_trigger_rejects_direct_invalid_updates(self):
         from psycopg.errors import RaiseException
 

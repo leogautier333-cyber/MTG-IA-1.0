@@ -5,6 +5,8 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
+from contextlib import contextmanager
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -256,62 +258,88 @@ def _summary_line(alert):
     return line
 
 
-def _summary_payload(alerts):
+def _summary_payload(alerts, delivery_id=None, recovered=0, previous_ids=()):
     groups = {}
     for alert in alerts:
         groups.setdefault(_summary_group(alert), []).append(_summary_line(alert))
     order = ("📈 Hausses", "📉 Baisses", "➡️ Stagnations", "🎯 Objectifs atteints", "📰 Veille du stock")
     sections = [f"{group} ({len(groups[group])})\n" + "\n".join(groups[group])
                 for group in order if group in groups]
+    banner = ""
+    if recovered:
+        banner = (
+            f"⚠️ Reprise après interruption : {recovered} alerte(s) ont peut-être déjà été reçues"
+            + (f" (lot {', '.join(previous_ids)})" if previous_ids else "")
+            + ". Ignore les doublons.\n\n"
+        )
     report = "\n\n".join(sections)
-    if len(report.encode("utf-16-le")) // 2 <= DISCORD_SUMMARY_LIMIT:
-        description = report
+    if len((banner + report).encode("utf-16-le")) // 2 <= DISCORD_SUMMARY_LIMIT:
+        description = banner + report
         attachment = None
     else:
         counts = " · ".join(f"{group} : {len(groups[group])}" for group in order if group in groups)
         description = (
-            f"{counts}\n\nLe détail complet est dans le fichier texte joint "
+            f"{banner}{counts}\n\nLe détail complet est dans le fichier texte joint "
             "(une ligne par alerte)."
         )
         attachment = report.encode("utf-8")
         if len(attachment) > DISCORD_ATTACHMENT_LIMIT:
             raise RuntimeError("Le récapitulatif dépasse la taille maximale de la pièce jointe Discord.")
-    payload = {
-        "embeds": [{"title": f"Récapitulatif du stock · {len(alerts)} alerte(s)",
-                    "description": description, "color": COLOR_INFO}],
-        "allowed_mentions": {"parse": []},
-    }
+    embed = {"title": f"Récapitulatif du stock · {len(alerts)} alerte(s)",
+             "description": description, "color": COLOR_INFO}
+    if delivery_id:
+        embed["footer"] = {"text": f"Lot {delivery_id}"}
+    payload = {"embeds": [embed], "allowed_mentions": {"parse": []}}
     return payload, attachment
 
 
-def _send_alert_summary(alerts, session=requests):
+class DiscordDeliveryRejected(RuntimeError):
+    """Discord a refusé le message ou la connexion n'a jamais abouti : rien n'a été publié."""
+
+
+def _post_alert_summary(payload, attachment, session=requests):
+    """Envoie le récapitulatif et retourne l'identifiant du message Discord s'il est fourni."""
     webhook_url = os.getenv(DISCORD_WEBHOOK_URL)
     if not webhook_url:
-        raise RuntimeError("DISCORD_WEBHOOK_URL n'est pas configurée.")
-    payload, attachment = _summary_payload(alerts)
+        raise DiscordDeliveryRejected("DISCORD_WEBHOOK_URL n'est pas configurée.")
     try:
         if attachment is None:
-            response = session.post(webhook_url, json=payload, timeout=10)
+            response = session.post(webhook_url, json=payload, params={"wait": "true"}, timeout=10)
         else:
             response = session.post(
-                webhook_url,
+                webhook_url, params={"wait": "true"},
                 data={"payload_json": json.dumps(payload, ensure_ascii=False)},
                 files={"files[0]": ("alertes-stock.txt", attachment, "text/plain; charset=utf-8")},
                 timeout=30,
             )
         response.raise_for_status()
+    except (requests.HTTPError, requests.ConnectTimeout) as error:
+        raise DiscordDeliveryRejected(
+            f"Discord a refusé l'envoi ({type(error).__name__}); l'URL du webhook est masquée."
+        ) from None
     except requests.RequestException as error:
         raise RuntimeError(
-            f"Échec de l'envoi Discord ({type(error).__name__}); l'URL du webhook est masquée."
+            f"Réponse Discord inconnue ({type(error).__name__}) : le message a peut-être été publié ; "
+            "l'URL du webhook est masquée."
         ) from None
+    try:
+        message_id = response.json().get("id")
+    except (ValueError, AttributeError):
+        return None
+    return message_id if isinstance(message_id, str) else None
 
 
 def _deliver_pending_alerts(active_positions, session=requests):
+    """Livre les alertes avec reprise explicite : `sending` signifie « envoi à confirmer ».
+
+    Un envoi sans réponse exploitable laisse les alertes en `sending` ; la livraison suivante les
+    renvoie avec un avertissement et l'identifiant du lot précédent, au lieu de les perdre ou de
+    créer silencieusement un doublon. Un refus certain de Discord les remet en attente."""
     changed = []
     pending = []
     active_ids = {scryfall_id for scryfall_id, _foil in active_positions}
     for alert in inventory.get_price_alerts():
-        if alert.get("status") != "pending":
+        if alert.get("status") not in ("pending", "sending"):
             continue
         if alert.get("kind", PRICE_ALERT) == PRICE_ALERT:
             still_in_stock = (alert.get("scryfall_id"), bool(alert.get("foil"))) in active_positions
@@ -324,17 +352,47 @@ def _deliver_pending_alerts(active_positions, session=requests):
         pending.append(alert)
     sent = 0
     if pending:
+        delivery_id = uuid.uuid4().hex[:8]
+        unconfirmed = [alert for alert in pending if alert["status"] == "sending"]
+        previous_ids = sorted({str(alert["delivery_id"]) for alert in unconfirmed if alert.get("delivery_id")})
         try:
-            _send_alert_summary(pending, session=session)
+            if not os.getenv(DISCORD_WEBHOOK_URL):
+                raise RuntimeError("DISCORD_WEBHOOK_URL n'est pas configurée.")
+            payload, attachment = _summary_payload(pending, delivery_id, len(unconfirmed), previous_ids)
         except RuntimeError as error:
             LOGGER.warning("%d alerte(s) Discord conservée(s) en attente : %s", len(pending), error)
         else:
-            sent_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            before = {alert["id"]: dict(alert) for alert in pending}
+            claimed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             for alert in pending:
-                alert["status"] = "sent"
-                alert["sent_at"] = sent_at
-            changed.extend(pending)
-            sent = len(pending)
+                alert.update(
+                    status="sending", delivery_id=delivery_id, delivery_started_at=claimed_at,
+                    delivery_attempts=int(alert.get("delivery_attempts") or 0) + 1,
+                )
+            inventory.save_price_alerts([*changed, *pending])
+            changed = []
+            try:
+                message_id = _post_alert_summary(payload, attachment, session=session)
+            except DiscordDeliveryRejected as error:
+                for alert in pending:
+                    original = before[alert["id"]]
+                    alert.clear()
+                    alert.update(original)
+                    alert["delivery_attempts"] = int(original.get("delivery_attempts") or 0) + 1
+                changed = pending
+                LOGGER.warning("%d alerte(s) Discord conservée(s) en attente : %s", len(pending), error)
+            except RuntimeError as error:
+                LOGGER.warning(
+                    "%d alerte(s) Discord à confirmer (lot %s) : %s", len(pending), delivery_id, error
+                )
+            else:
+                sent_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                for alert in pending:
+                    alert.update(status="sent", sent_at=sent_at)
+                    if message_id:
+                        alert["discord_message_id"] = message_id
+                changed = pending
+                sent = len(pending)
     if changed:
         inventory.save_price_alerts(changed)
     return sent

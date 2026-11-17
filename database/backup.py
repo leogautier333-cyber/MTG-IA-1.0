@@ -1,5 +1,6 @@
 import argparse
 import base64
+import binascii
 import gzip
 import io
 import json
@@ -10,8 +11,8 @@ from pathlib import Path
 
 import ijson
 from cryptography.fernet import Fernet, InvalidToken
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives import hashes
+from cryptography.exceptions import InvalidSignature, InvalidTag
+from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
@@ -158,11 +159,132 @@ class _DecryptedReader(io.RawIOBase):
         return 0
 
 
+AUTHENTICATION_FAILED = (
+    "Backup authentication failed; the key is incorrect or the archive was modified."
+)
+FERNET_VERSION = 0x80
+FERNET_PREFIX_SIZE = 1 + 8 + 16
+FERNET_MAC_SIZE = 32
+
+
+def _fernet_key_parts():
+    _fernet()
+    key = base64.urlsafe_b64decode(os.environ["BACKUP_ENCRYPTION_KEY"])
+    return key[:16], key[16:]
+
+
+def _fernet_token_chunks(source, chunk_size=1024 * 1024):
+    """Décode le jeton Fernet base64 en flux, par blocs de 4 caractères alignés."""
+    source.seek(0)
+    pending = b""
+    try:
+        while raw := source.read(chunk_size):
+            pending += b"".join(raw.split())
+            usable = len(pending) // 4 * 4
+            if usable:
+                yield base64.urlsafe_b64decode(pending[:usable])
+                pending = pending[usable:]
+    except binascii.Error:
+        raise BackupEncryptionError(AUTHENTICATION_FAILED) from None
+    if pending:
+        raise BackupEncryptionError(AUTHENTICATION_FAILED)
+
+
+def _verify_fernet_token(source, signing_key):
+    """Authentifie tout le jeton avant la moindre écriture, en mémoire bornée."""
+    mac = hmac.HMAC(signing_key, hashes.SHA256())
+    tail = b""
+    total = 0
+    for chunk in _fernet_token_chunks(source):
+        if total == 0 and chunk[0] != FERNET_VERSION:
+            raise BackupEncryptionError(AUTHENTICATION_FAILED)
+        total += len(chunk)
+        data = tail + chunk
+        tail = data[-FERNET_MAC_SIZE:]
+        if len(data) > FERNET_MAC_SIZE:
+            mac.update(data[:-FERNET_MAC_SIZE])
+    if total < FERNET_PREFIX_SIZE + 16 + FERNET_MAC_SIZE:
+        raise BackupEncryptionError(AUTHENTICATION_FAILED)
+    try:
+        mac.verify(tail)
+    except InvalidSignature:
+        raise BackupEncryptionError(AUTHENTICATION_FAILED) from None
+
+
+def _fernet_plaintext_chunks(source, encryption_key):
+    decryptor = unpadder = None
+    buffer = b""
+    for chunk in _fernet_token_chunks(source):
+        buffer += chunk
+        if decryptor is None:
+            if len(buffer) < FERNET_PREFIX_SIZE:
+                continue
+            decryptor = Cipher(algorithms.AES(encryption_key), modes.CBC(buffer[9:25])).decryptor()
+            unpadder = padding.PKCS7(128).unpadder()
+            buffer = buffer[FERNET_PREFIX_SIZE:]
+        if len(buffer) > FERNET_MAC_SIZE:
+            body, buffer = buffer[:-FERNET_MAC_SIZE], buffer[-FERNET_MAC_SIZE:]
+            plaintext = unpadder.update(decryptor.update(body))
+            if plaintext:
+                yield plaintext
+    try:
+        plaintext = unpadder.update(decryptor.finalize()) + unpadder.finalize()
+    except (ValueError, AttributeError):
+        raise BackupEncryptionError(AUTHENTICATION_FAILED) from None
+    if plaintext:
+        yield plaintext
+
+
+class _ChunkReader(io.RawIOBase):
+    def __init__(self, chunks):
+        super().__init__()
+        self.chunks = iter(chunks)
+        self.buffer = b""
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        while not self.buffer:
+            try:
+                self.buffer = next(self.chunks)
+            except StopIteration:
+                return 0
+        size = min(len(buffer), len(self.buffer))
+        buffer[:size] = self.buffer[:size]
+        self.buffer = self.buffer[size:]
+        return size
+
+
+def _restore_gzip_stream(open_stream, archive, allow_plaintext_legacy):
+    """Restaure un flux gzip ; relit en mémoire seulement si l'ordre des tables est ancien."""
+    try:
+        with open_stream() as content:
+            return snapshot.restore_database_snapshot_stream(content)
+    except snapshot.TableOrderError:
+        archive.seek(0)
+        return restore_backup_bytes(archive.read(), allow_plaintext_legacy=allow_plaintext_legacy)
+    except (OSError, EOFError, UnicodeDecodeError, ijson.JSONError):
+        raise BackupEncryptionError("Backup is not a valid compressed database snapshot.") from None
+
+
 def restore_backup(source, allow_plaintext_legacy=False):
     with Path(source).open("rb") as archive:
-        if archive.read(len(STREAM_HEADER)) != STREAM_HEADER:
-            archive.seek(0)
-            return restore_backup_bytes(archive.read(), allow_plaintext_legacy=allow_plaintext_legacy)
+        header = archive.read(len(STREAM_HEADER))
+        archive.seek(0)
+        if header != STREAM_HEADER:
+            if allow_plaintext_legacy and header.startswith(b"\x1f\x8b"):
+                return _restore_gzip_stream(
+                    lambda: gzip.GzipFile(fileobj=archive, mode="rb"), archive, allow_plaintext_legacy
+                )
+            signing_key, encryption_key = _fernet_key_parts()
+            _verify_fernet_token(archive, signing_key)
+
+            def open_decrypted():
+                reader = io.BufferedReader(_ChunkReader(_fernet_plaintext_chunks(archive, encryption_key)))
+                return gzip.GzipFile(fileobj=reader, mode="rb")
+
+            return _restore_gzip_stream(open_decrypted, archive, allow_plaintext_legacy)
         try:
             with io.BufferedReader(_DecryptedReader(archive)) as verified:
                 while verified.read(1024 * 1024):
@@ -171,9 +293,7 @@ def restore_backup(source, allow_plaintext_legacy=False):
                 with gzip.GzipFile(fileobj=decrypted, mode="rb") as content:
                     return snapshot.restore_database_snapshot_stream(content)
         except InvalidTag:
-            raise BackupEncryptionError(
-                "Backup authentication failed; the key is incorrect or the archive was modified."
-            ) from None
+            raise BackupEncryptionError(AUTHENTICATION_FAILED) from None
         except (OSError, EOFError, UnicodeDecodeError, ijson.JSONError):
             raise BackupEncryptionError("Backup is not a valid compressed database snapshot.") from None
 

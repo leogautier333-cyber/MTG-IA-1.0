@@ -130,7 +130,10 @@ def render_prices_tab():
                 "Fraîcheur": alert["freshness"],
                 "Fiabilité": alert["reliability"],
                 "Verdict": alert.get("verdict", ""),
-                "État Discord": alert.get("status"),
+                "État Discord": {
+                    "pending": "En attente", "sending": "Envoi à confirmer",
+                    "sent": "Envoyée", "cancelled": "Annulée",
+                }.get(alert.get("status"), alert.get("status")),
                 "Date": alert.get("created_at"),
             } for alert in prioritized_alerts],
             hide_index=True,

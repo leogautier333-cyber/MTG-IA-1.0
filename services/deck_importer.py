@@ -1,10 +1,12 @@
 import re
 import unicodedata
+from decimal import Decimal
 from urllib.parse import urlparse
 
 import requests
 
 import scryfall
+from services.money import decimal_amount, rounded_money
 
 
 def parse_plain_decklist(text):
@@ -106,9 +108,9 @@ def analyze_decklist(cards, collection, fetch_prices=True):
                 price = (card_data.get("prices") or {}).get("eur")
                 card["price_eur"] = float(price) if price is not None else None
 
-    estimated_cost = sum(
-        (card["price_eur"] or 0) * card["quantity"] for card in missing
-    )
+    estimated_cost = rounded_money(sum(
+        (decimal_amount(card["price_eur"] or 0) * card["quantity"] for card in missing), Decimal("0")
+    ))
     unpriced_count = sum(card["quantity"] for card in missing if card["price_eur"] is None)
     deck_names = {_normalize_name(card["name"]) for card in cards}
     excluded_from_deck = [

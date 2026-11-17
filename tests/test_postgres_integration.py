@@ -142,6 +142,34 @@ class PostgresIntegrationTests(unittest.TestCase):
         self.assertEqual(self.storage.get_metadata("schema_version"), "5")
         self.assertEqual(self.storage.find_inventory_inconsistencies(), [])
 
+    def test_legacy_fernet_restore_streams_and_sub_cent_scan_work_on_postgres(self):
+        from database.backup import create_backup_bytes, restore_backup
+        from database.healthcheck import check_database
+        from cryptography.fernet import Fernet
+        from services import inventory
+
+        inventory.add_card_to_collection(
+            scryfall_id="test-card", name="Test", set_code="tst", purchase_price=1, selling_price=2,
+        )
+        self.storage.record_price_snapshot("test-card", 2, observed_at="2026-01-01")
+        before = inventory.get_collection()
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
+            path = Path(directory) / "legacy.enc"
+            path.write_bytes(create_backup_bytes())
+            inventory.add_card_to_collection(
+                scryfall_id="other", name="Other", set_code="tst", purchase_price=1, selling_price=2,
+            )
+            with patch("database.backup.restore_backup_bytes", side_effect=AssertionError("in memory")):
+                restore_backup(path)
+        self.assertEqual(inventory.get_collection(), before)
+        with self.storage._database() as connection:
+            connection.execute("UPDATE price_snapshots SET price_eur = 2.0049")
+            connection.execute("UPDATE inventory SET selling_price = 2.005")
+        report = check_database()["sub_cent_amounts"]
+        self.assertEqual({name: len(ids) for name, ids in report.items()},
+                         {"inventory": 1, "price_snapshots": 1})
+
     def test_sql_validation_trigger_rejects_direct_invalid_updates(self):
         from psycopg.errors import RaiseException
 

@@ -41,6 +41,10 @@ DELETE_ORDER = (
 )
 
 
+class TableOrderError(ValueError):
+    """La sauvegarde est valide mais ses tables ne sont pas dans l'ordre séquentiel actuel."""
+
+
 def _validate_schema_version(row):
     if row["key"] == "schema_version":
         try:
@@ -237,7 +241,7 @@ def restore_database_snapshot_stream(source, batch_size=500):
                     raise ValueError("La sauvegarde contient une table inattendue ou en double.")
                 index = table_order.index(value)
                 if index <= last_table_index:
-                    raise ValueError("Ordre des tables de sauvegarde invalide.")
+                    raise TableOrderError("Ordre des tables de sauvegarde invalide.")
                 last_table_index = index
                 table_name = value
                 seen_tables.add(value)

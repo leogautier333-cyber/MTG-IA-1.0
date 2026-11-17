@@ -1,4 +1,9 @@
+import base64
+import gzip
+import hashlib
+import io
 import tempfile
+import tracemalloc
 import unittest
 import os
 import sqlite3
@@ -9,7 +14,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
-from database import market_data, snapshot, storage
+from database import backup, market_data, snapshot, storage
 from database.backup import (
     BackupEncryptionError,
     create_backup,
@@ -451,6 +456,69 @@ class StorageTests(unittest.TestCase):
         storage.save_collection([])
         restore_backup_bytes(legacy)
         self.assertEqual(storage.get_collection(), [card])
+
+    def test_legacy_fernet_archive_restores_in_streaming_mode_and_rejects_tampering(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        archive = create_backup_bytes()
+        path = Path(self.temporary_directory.name) / "legacy.enc"
+        path.write_bytes(archive + b"\n")
+        storage.save_collection([])
+        with patch("database.backup.restore_backup_bytes", side_effect=AssertionError("in memory")):
+            restore_backup(path)
+        self.assertEqual(storage.get_collection(), [card])
+        for position in (0, 40, len(archive) // 2, len(archive) - 5):
+            tampered = bytearray(archive)
+            tampered[position] = ord("A") if tampered[position] != ord("A") else ord("B")
+            path.write_bytes(bytes(tampered))
+            storage.save_collection([{**card, "scryfall_id": "unchanged"}])
+            with self.subTest(position=position), \
+                 self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+                restore_backup(path)
+            self.assertEqual(storage.get_collection()[0]["scryfall_id"], "unchanged")
+        path.write_bytes(archive[:-8])
+        with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+            restore_backup(path)
+        path.write_bytes(archive)
+        with patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii")}):
+            with self.assertRaisesRegex(BackupEncryptionError, "authentication failed"):
+                restore_backup(path)
+
+    def test_legacy_fernet_archive_with_older_table_order_still_restores(self):
+        card = {"scryfall_id": "card", "name": "Card", "set_code": "tst",
+                "purchase_price": 1.0, "selling_price": 2.0}
+        storage.save_collection([card])
+        data = snapshot.export_database_snapshot()
+        data["tables"] = dict(reversed(list(data["tables"].items())))
+        path = Path(self.temporary_directory.name) / "old-order.enc"
+        compressed = gzip.compress(json.dumps(data).encode("utf-8"))
+        path.write_bytes(Fernet(os.environ["BACKUP_ENCRYPTION_KEY"].encode("ascii")).encrypt(compressed))
+        storage.save_collection([])
+        restore_backup(path)
+        self.assertEqual(storage.get_collection(), [card])
+
+    def test_fernet_decryption_reader_uses_bounded_memory(self):
+        payload = os.urandom(24 * 1024 * 1024)
+        fernet = Fernet(os.environ["BACKUP_ENCRYPTION_KEY"].encode("ascii"))
+        path = Path(self.temporary_directory.name) / "large-fernet.enc"
+        path.write_bytes(fernet.encrypt(payload))
+        key = base64.urlsafe_b64decode(os.environ["BACKUP_ENCRYPTION_KEY"])
+        with path.open("rb") as archive:
+            tracemalloc.start()
+            try:
+                backup._verify_fernet_token(archive, key[:16])
+                reader = io.BufferedReader(backup._ChunkReader(
+                    backup._fernet_plaintext_chunks(archive, key[16:])
+                ))
+                digest = hashlib.sha256()
+                while chunk := reader.read(1024 * 1024):
+                    digest.update(chunk)
+                peak = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+        self.assertEqual(digest.digest(), hashlib.sha256(payload).digest())
+        self.assertLess(peak, 8 * 1024 * 1024)
 
     def test_stream_restore_batches_rows_and_preserves_history(self):
         cards = [{"scryfall_id": f"card-{index}", "name": "Card", "set_code": "tst",

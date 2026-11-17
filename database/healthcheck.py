@@ -29,10 +29,12 @@ def check_database():
             )
         inconsistent_entries = storage.find_inventory_inconsistencies(connection)
         invalid_snapshots = storage.find_invalid_price_snapshots(connection)
+        sub_cent_amounts = storage.find_sub_cent_amounts(connection)
     return {
         "backend": backend, "table_count": len(present_tables),
         "inconsistent_inventory_entries": inconsistent_entries,
         "invalid_price_snapshots": invalid_snapshots,
+        "sub_cent_amounts": sub_cent_amounts,
     }
 
 
@@ -64,6 +66,14 @@ def main():
             + ". No data was modified; review these rows manually.",
             file=sys.stderr,
         )
+    for table, items in result["sub_cent_amounts"].items():
+        if items:
+            print(
+                f"Warning: {len(items)} existing amount(s) in {table} are not whole cents "
+                f"(ids: {', '.join(str(item) for item in items[:20])}). No data was modified; "
+                "new writes are rounded to the cent.",
+                file=sys.stderr,
+            )
     return 0
 
 

@@ -1,5 +1,8 @@
 """Classement explicable des alertes liées au stock."""
 from datetime import date
+from decimal import Decimal
+
+from services.money import decimal_amount
 
 PRICE_EVENT = "PRICE"
 URGENT_IMPACT_EUR = 20.0
@@ -47,9 +50,9 @@ def prioritize(alerts, collection, price_history, today=None):
             None,
         )
         if market is not None:
-            card_values[key[0]] = card_values.get(key[0], 0.0) + float(market) * quantity
+            card_values[key[0]] = card_values.get(key[0], Decimal("0")) + decimal_amount(market) * quantity
 
-    gross = sum(card_values.values())
+    gross = sum(card_values.values(), Decimal("0"))
 
     ranked = []
     for alert in alerts:
@@ -64,16 +67,16 @@ def prioritize(alerts, collection, price_history, today=None):
         previous = alert.get("previous_price")
         current = alert.get("current_price")
         if in_stock and kind == PRICE_EVENT and previous is not None and current is not None:
-            impact = abs(float(current) - float(previous)) * quantity
+            impact = float(abs(decimal_amount(current) - decimal_amount(previous)) * quantity)
         else:
             impact = None
 
         position_value = None
         if in_stock and current is not None and kind in {PRICE_EVENT, "TARGET_REACHED"}:
-            position_value = float(current) * quantity
+            position_value = decimal_amount(current) * quantity
         elif in_stock:
             position_value = card_values.get(key[0])
-        share = position_value / gross * 100 if position_value is not None and gross else 0.0
+        share = float(position_value / gross * 100) if position_value is not None and gross else 0.0
         created = _created_day(alert)
         age_days = (today - created).days if created else None
         fresh = age_days is not None and 0 <= age_days <= 7

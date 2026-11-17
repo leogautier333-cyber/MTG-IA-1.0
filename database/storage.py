@@ -6,7 +6,7 @@ import sqlite3
 import threading
 from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -657,20 +657,37 @@ def validate_inventory_quantity(value):
     return int(quantity)
 
 
-def validate_monetary_amount(value, field):
+MAX_MONETARY_AMOUNT = Decimal("1000000000")
+CENT = Decimal("0.01")
+
+
+def validate_monetary_amount(value, field, quantize=True):
+    """Valide un montant et l'arrondit au centime (moitié supérieure) avant tout stockage.
+
+    Un montant en centimes survit exactement à l'aller-retour DOUBLE PRECISION/JSON ; les
+    totaux sont ensuite calculés en Decimal (services.money)."""
     try:
         amount = float(value)
     except (TypeError, ValueError, OverflowError):
         raise ValueError(f"{field} doit être un montant positif ou nul.") from None
     if not math.isfinite(amount) or amount < 0:
         raise ValueError(f"{field} doit être un montant fini, positif ou nul.")
-    return amount
+    if amount > MAX_MONETARY_AMOUNT:
+        raise ValueError(f"{field} dépasse le montant maximal autorisé.")
+    if not quantize:
+        return amount
+    return float(Decimal(repr(amount)).quantize(CENT, rounding=ROUND_HALF_UP)) + 0.0
 
 
-def _inventory_row(card):
-    for field in ("target_price", "actual_sale_price"):
+_CARD_AMOUNT_FIELDS = ("purchase_price", "selling_price", "target_price", "actual_sale_price")
+
+
+def _inventory_row(card, quantize=True):
+    amounts = {}
+    for field in _CARD_AMOUNT_FIELDS:
         if card.get(field) is not None:
-            validate_monetary_amount(card[field], field)
+            amounts[field] = validate_monetary_amount(card[field], field, quantize)
+    card = {**card, **amounts}
     return (
         str(card.get("scryfall_id", "")),
         int(bool(card.get("foil"))),
@@ -681,8 +698,8 @@ def _inventory_row(card):
         str(card.get("status", "FOR_SALE")),
         card.get("date_added"),
         card.get("date_sold"),
-        validate_monetary_amount(card.get("purchase_price") or 0, "Le prix d'achat"),
-        validate_monetary_amount(card.get("selling_price") or 0, "Le prix de vente"),
+        validate_monetary_amount(card.get("purchase_price") or 0, "Le prix d'achat", quantize),
+        validate_monetary_amount(card.get("selling_price") or 0, "Le prix de vente", quantize),
         validate_inventory_quantity(card.get("quantity") if card.get("quantity") is not None else 1),
         _serialize(card),
     )
@@ -697,6 +714,28 @@ _INSERT_INVENTORY = """INSERT INTO inventory(
 def _replace_inventory(connection, collection):
     connection.execute("DELETE FROM inventory")
     connection.executemany(_INSERT_INVENTORY, [_inventory_row(card) for card in collection])
+
+
+def find_sub_cent_amounts(connection=None):
+    """Identifiants des montants déjà stockés avec une fraction de centime (lecture seule)."""
+    queries = {
+        "inventory": """SELECT entry_id AS item_id FROM inventory
+            WHERE ABS(purchase_price * 100 - ROUND(purchase_price * 100)) > 0.000001
+               OR ABS(selling_price * 100 - ROUND(selling_price * 100)) > 0.000001
+            ORDER BY entry_id""",
+        "price_snapshots": """SELECT snapshot_id AS item_id FROM price_snapshots
+            WHERE ABS(price_eur * 100 - ROUND(price_eur * 100)) > 0.000001
+            ORDER BY snapshot_id""",
+    }
+
+    def inspect(active):
+        return {name: [row["item_id"] for row in active.execute(query).fetchall()]
+                for name, query in queries.items()}
+
+    if connection is not None:
+        return inspect(connection)
+    with _database() as active:
+        return inspect(active)
 
 
 def find_invalid_price_snapshots(connection=None):
@@ -730,7 +769,7 @@ def find_inventory_inconsistencies(connection=None):
         ).fetchall()
         for row in rows:
             try:
-                expected = _inventory_row(json.loads(row["payload"]))[:-1]
+                expected = _inventory_row(json.loads(row["payload"]), quantize=False)[:-1]
             except (ValueError, TypeError, json.JSONDecodeError):
                 issues.append(row["entry_id"])
                 continue

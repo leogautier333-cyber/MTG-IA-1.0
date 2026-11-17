@@ -1,5 +1,7 @@
+from decimal import Decimal
 from itertools import combinations
 
+from services.money import decimal_amount
 from services.portfolio_analytics import portfolio_summary as _portfolio_summary
 
 def portfolio_summary(collection):
@@ -45,13 +47,15 @@ def suggest_exchange_lot(collection, target_value, max_cards=3, max_candidates=2
         card for card in collection
         if card.get("status") == "FOR_SALE" and float(card.get("selling_price") or 0) > 0
     ][:max_candidates]
+    target = decimal_amount(target_value)
     options = []
     for size in range(1, min(max_cards, len(candidates)) + 1):
         for lot in combinations(candidates, size):
-            value = sum(float(card.get("selling_price") or 0) for card in lot)
-            options.append((abs(value - target_value), value, lot))
+            value = sum((decimal_amount(card.get("selling_price") or 0) for card in lot), Decimal("0"))
+            options.append((abs(value - target), value, lot))
     options.sort(key=lambda option: (option[0], len(option[2])))
     return [
-        {"difference": difference, "value": value, "cards": [card.get("name", "Carte") for card in lot]}
+        {"difference": float(difference), "value": float(value),
+         "cards": [card.get("name", "Carte") for card in lot]}
         for difference, value, lot in options[:3]
     ]

@@ -55,18 +55,61 @@ class DiscordSummaryTests(unittest.TestCase):
         self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 0)
         session.post.assert_called_once()
 
-    def test_failed_delivery_keeps_alerts_pending_and_cancels_removed_positions(self):
+    def test_ambiguous_failure_keeps_unconfirmed_batch_and_resend_is_flagged(self):
         alerts = [alert(0), alert(1), alert(2)]
         inventory.save_price_alerts(alerts)
         session = Mock()
         session.post.side_effect = requests.Timeout("test")
         positions = {(item["scryfall_id"], item["foil"]) for item in alerts[:2]}
         self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 0)
-        statuses = {item["id"]: item["status"] for item in inventory.get_price_alerts()}
-        self.assertEqual(statuses, {"alert-0": "pending", "alert-1": "pending", "alert-2": "cancelled"})
+        saved = {item["id"]: item for item in inventory.get_price_alerts()}
+        self.assertEqual({key: item["status"] for key, item in saved.items()},
+                         {"alert-0": "sending", "alert-1": "sending", "alert-2": "cancelled"})
+        first_lot = saved["alert-0"]["delivery_id"]
+        self.assertEqual(saved["alert-0"]["delivery_attempts"], 1)
         session.post.side_effect = None
+        response = Mock()
+        response.json.return_value = {"id": "message-1"}
+        session.post.return_value = response
         self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 2)
         self.assertEqual(session.post.call_count, 2)
+        embed = session.post.call_args.kwargs["json"]["embeds"][0]
+        self.assertIn("Reprise après interruption", embed["description"])
+        self.assertIn(first_lot, embed["description"])
+        self.assertNotEqual(embed["footer"]["text"], f"Lot {first_lot}")
+        final = {item["id"]: item for item in inventory.get_price_alerts()}
+        self.assertEqual(final["alert-0"]["status"], "sent")
+        self.assertEqual(final["alert-0"]["discord_message_id"], "message-1")
+        self.assertEqual(final["alert-0"]["delivery_attempts"], 2)
+
+    def test_claim_is_saved_before_posting_and_refusals_restore_state(self):
+        item = alert(0)
+        inventory.save_price_alerts([item])
+        positions = {("card-0", False)}
+        observed = []
+        session = Mock()
+
+        def refuse(*args, **kwargs):
+            observed.append(inventory.get_price_alerts()[0]["status"])
+            error = requests.HTTPError("test")
+            raise error
+
+        session.post.side_effect = refuse
+        self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 0)
+        self.assertEqual(observed, ["sending"])
+        self.assertEqual(inventory.get_price_alerts()[0]["status"], "pending")
+        session.post.side_effect = requests.ConnectTimeout("test")
+        self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 0)
+        self.assertEqual(inventory.get_price_alerts()[0]["status"], "pending")
+        session.post.side_effect = requests.ReadTimeout("test")
+        phase_one_monitor._deliver_pending_alerts(positions, session)
+        unconfirmed = inventory.get_price_alerts()[0]
+        self.assertEqual(unconfirmed["status"], "sending")
+        session.post.side_effect = requests.HTTPError("test")
+        self.assertEqual(phase_one_monitor._deliver_pending_alerts(positions, session), 0)
+        restored = inventory.get_price_alerts()[0]
+        self.assertEqual(restored["status"], "sending")
+        self.assertEqual(restored["delivery_id"], unconfirmed["delivery_id"])
 
     def test_mixed_alerts_and_legacy_price_are_grouped(self):
         legacy = alert(0)

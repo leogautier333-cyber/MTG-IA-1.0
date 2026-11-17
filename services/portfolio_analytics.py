@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from database import market_data, storage
 from services.inventory import calculate_net_margin
-from services.money import decimal_amount
+from services.money import decimal_amount, rounded_money
 
 
 CONDITION_DISCOUNTS = {"NM": 0.0, "EX": 0.03, "LP": 0.05, "GD": 0.08, "PL": 0.15, "PO": 0.25}
@@ -221,7 +221,7 @@ def suggest_arbitrage(collection, max_suggestions=5):
             target_price = alternative.get("price_eur_foil" if card.get("foil") else "price_eur")
             if target_price is None or target_price <= 0 or target_price >= current_price:
                 continue
-            spread = sale["net_total"] - float(target_price) * quantity
+            spread = decimal_amount(sale["net_total"]) - decimal_amount(target_price) * quantity
             if spread <= 0:
                 continue
             suggestions.append({
@@ -230,8 +230,8 @@ def suggest_arbitrage(collection, max_suggestions=5):
                 "buy_set": alternative.get("set_code", ""),
                 "quantity": quantity,
                 "sale_net_eur": sale["net_total"],
-                "replacement_cost_eur": round(float(target_price) * quantity, 2),
-                "estimated_spread_eur": round(spread, 2),
+                "replacement_cost_eur": rounded_money(decimal_amount(target_price) * quantity),
+                "estimated_spread_eur": rounded_money(spread),
                 "source": "Prix Scryfall indicatifs; disponibilité et frais de marché non vérifiés.",
             })
     suggestions.sort(key=lambda item: item["estimated_spread_eur"], reverse=True)

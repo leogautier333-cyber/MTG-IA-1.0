@@ -125,9 +125,6 @@ class PostgresIntegrationTests(unittest.TestCase):
                 "purchase_price": 19.99, "selling_price": 12345.67}
         self.storage.save_collection([card])
         self.storage.record_price_snapshot("test", 12345.67, observed_at="2026-01-01")
-        with self.storage._database() as connection:
-            stored = connection.execute("SELECT selling_price FROM inventory").fetchone()
-        self.assertNotEqual(stored["selling_price"], 12345.67)
         self.storage._INITIALIZED_PATHS.discard(self.url)
         self.assertEqual(self.storage.get_price_history()["test"]["2026-01-01"]["eur"], 12345.67)
         with self.storage._database() as connection:
@@ -140,6 +137,8 @@ class PostgresIntegrationTests(unittest.TestCase):
             row = connection.execute("SELECT purchase_price, selling_price FROM inventory").fetchone()
         self.assertEqual(types, {"double precision"})
         self.assertEqual((row["purchase_price"], row["selling_price"]), (19.99, 12345.67))
+        self.storage.record_price_snapshot("large", 1234567.89, observed_at="2026-01-02")
+        self.assertEqual(self.storage.get_price_history()["large"]["2026-01-02"]["eur"], 1234567.89)
         self.assertEqual(self.storage.get_metadata("schema_version"), "5")
         self.assertEqual(self.storage.find_inventory_inconsistencies(), [])
 

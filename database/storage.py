@@ -360,10 +360,10 @@ _MONEY_COLUMNS = (
 
 
 def _widen_postgres_money_columns(connection):
-    """PostgreSQL REAL (4 octets) arrondit les prix ; SQLite REAL a déjà 8 octets.
+    """PostgreSQL REAL (4 octets, ~7 chiffres) arrondit les gros montants ; SQLite REAL a 8 octets.
 
-    La conversion passe par le texte le plus court qui restitue le REAL (PostgreSQL ≥ 12),
-    pour obtenir 19.99 plutôt que 19.989999771118164."""
+    La conversion passe par le texte le plus court du REAL (PostgreSQL ≥ 12) pour conserver
+    la valeur lue aujourd'hui (19.99 et non 19.989999771118164)."""
     if connection.dialect != "postgres":
         return
     for table, column in _MONEY_COLUMNS:

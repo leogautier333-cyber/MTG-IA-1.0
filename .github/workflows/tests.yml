@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Installer les dépendances
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt -c constraints.txt
       - name: Tests SQLite isolés
         run: env GITHUB_ACTIONS='' DATABASE_URL='' MTG_DATABASE_URL='' python -m unittest discover -s tests
       - name: Tests PostgreSQL local jetable

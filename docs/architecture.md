@@ -46,10 +46,11 @@ Le calcul de marge et les totaux monétaires des tableaux de stock, de ventes, d
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
 Les écritures de stock, ventes et relevés contrôlent les quantités et montants à la frontière applicative : les quantités doivent être entières et strictement positives ; les prix doivent être finis et non négatifs. Les triggers SQL protègent aussi les colonnes de quantité et de prix de l'inventaire et les prix des relevés contre les écritures directes ; ils ne couvrent pas les champs du payload JSON ni les autres tables.
+Les écritures applicatives dérivent les colonnes SQL du payload JSON dans la même requête. `python -m database.healthcheck` compare en lecture seule les colonnes d'inventaire à leur payload et signale sur stderr les `entry_id` divergents (jusqu'à 20) sans les corriger ni échouer : une divergence introduite hors application doit être examinée manuellement.
 
 ## Lancer l'application et le suivi
 
-Installer les dépendances du projet avec `python -m pip install -r requirements.txt`, définir `DATABASE_URL` (PostgreSQL), vérifier avec `python -m database.healthcheck`, puis lancer l'interface avec `streamlit run app.py`.
+Installer les dépendances du projet avec `python -m pip install -r requirements.txt -c constraints.txt` (versions testées ; les workflows de production utilisent `requirements-actions.txt` avec les mêmes contraintes, et un test vérifie que chacun installe les paquets importés par sa commande), définir `DATABASE_URL` (PostgreSQL), vérifier avec `python -m database.healthcheck`, puis lancer l'interface avec `streamlit run app.py`.
 
 Par défaut, l'interface conserve ses onglets classiques. Pour réduire le travail à chaque interaction, définir `MTG_LAZY_NAVIGATION=true` dans l'environnement ou les secrets Streamlit : un sélecteur remplace les onglets et seul l'écran sélectionné est exécuté. Les champs non enregistrés d'un écran peuvent être réinitialisés lors du changement de navigation ; terminer ou enregistrer une saisie avant de changer d'écran.
 

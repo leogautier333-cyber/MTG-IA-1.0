@@ -23,7 +23,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: python -m pip install "psycopg[binary]>=3.2" cryptography
+        run: python -m pip install -r requirements-actions.txt -c constraints.txt
 
       - name: Create encrypted backup
         run: python -m database.backup create backup/mtg-backup.json.gz.enc

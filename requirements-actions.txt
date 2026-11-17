@@ -1,0 +1,4 @@
+requests
+ijson
+psycopg[binary]>=3.2
+cryptography>=44

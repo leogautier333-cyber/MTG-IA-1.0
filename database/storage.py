@@ -670,6 +670,40 @@ def _replace_inventory(connection, collection):
     connection.executemany(_INSERT_INVENTORY, [_inventory_row(card) for card in collection])
 
 
+def find_inventory_inconsistencies(connection=None):
+    """Retourne les entry_id dont les colonnes SQL divergent du payload JSON (lecture seule)."""
+    columns = ("scryfall_id", "foil", "language", "condition", "set_code", "collector_number",
+               "status", "date_added", "date_sold", "purchase_price", "selling_price", "quantity")
+
+    def same(stored, expected):
+        if isinstance(expected, float) or isinstance(stored, float):
+            try:
+                return math.isclose(float(stored), float(expected), rel_tol=1e-6, abs_tol=1e-9)
+            except (TypeError, ValueError):
+                return False
+        return stored == expected
+
+    def inspect(active):
+        issues = []
+        rows = active.execute(
+            f"SELECT entry_id, {', '.join(columns)}, payload FROM inventory ORDER BY entry_id"
+        ).fetchall()
+        for row in rows:
+            try:
+                expected = _inventory_row(json.loads(row["payload"]))[:-1]
+            except (ValueError, TypeError, json.JSONDecodeError):
+                issues.append(row["entry_id"])
+                continue
+            if not all(same(row[name], value) for name, value in zip(columns, expected)):
+                issues.append(row["entry_id"])
+        return issues
+
+    if connection is not None:
+        return inspect(connection)
+    with _database() as active:
+        return inspect(active)
+
+
 def _replace_watchlist(connection, watchlist):
     connection.execute("DELETE FROM watchlist")
     connection.executemany(

@@ -16,7 +16,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Discord test dependency
-        run: python -m pip install requests
+        run: python -m pip install -r requirements-actions.txt -c constraints.txt
 
       - name: Send test alert
         run: python -m services.phase_one_monitor --test-discord

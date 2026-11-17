@@ -27,7 +27,11 @@ def check_database():
                 "Database schema is incomplete; missing table(s): "
                 + ", ".join(sorted(missing_tables))
             )
-    return {"backend": backend, "table_count": len(present_tables)}
+        inconsistent_entries = storage.find_inventory_inconsistencies(connection)
+    return {
+        "backend": backend, "table_count": len(present_tables),
+        "inconsistent_inventory_entries": inconsistent_entries,
+    }
 
 
 def main():
@@ -44,6 +48,13 @@ def main():
         )
         return 1
     print(f"Database ready: backend={result['backend']}, tables={result['table_count']}")
+    if result["inconsistent_inventory_entries"]:
+        print(
+            "Warning: inventory columns differ from their JSON payload for entry_id(s): "
+            + ", ".join(str(entry) for entry in result["inconsistent_inventory_entries"][:20])
+            + ". No data was modified; review these rows manually.",
+            file=sys.stderr,
+        )
     return 0
 
 

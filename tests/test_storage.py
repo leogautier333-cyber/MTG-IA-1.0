@@ -46,6 +46,30 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["backend"], "sqlite")
         self.assertEqual(result["table_count"], len(storage.REQUIRED_TABLES))
         self.assertEqual(storage.get_metadata("schema_version"), str(storage.SCHEMA_VERSION))
+        self.assertEqual(result["inconsistent_inventory_entries"], [])
+
+    def test_inventory_consistency_check_follows_writes_and_reports_without_repair(self):
+        card = {"scryfall_id": "a", "name": "A", "set_code": "tst", "status": "FOR_SALE",
+                "quantity": 2, "purchase_price": 0.1, "selling_price": 1.1, "foil": False}
+        storage.append_inventory_cards([card, {**card, "scryfall_id": "b"}])
+        current = storage.get_collection()[0]
+        self.assertTrue(storage.update_inventory_card(current, 3, 0.2, 2.2, 5))
+        self.assertTrue(storage.mark_inventory_sold("b", 3, "2026-10-10T10:00:00+00:00"))
+        self.assertEqual(storage.find_inventory_inconsistencies(), [])
+        with storage._database() as connection:
+            connection.execute("UPDATE inventory SET quantity = 9 WHERE scryfall_id = 'a'")
+            connection.execute("UPDATE inventory SET payload = '{' WHERE scryfall_id = 'b'")
+        first, second = [row["entry_id"] for row in self._entries()]
+        self.assertEqual(storage.find_inventory_inconsistencies(), [first, second])
+        self.assertEqual(check_database()["inconsistent_inventory_entries"], [first, second])
+        with storage._database() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT quantity FROM inventory WHERE scryfall_id = 'a'"
+            ).fetchone()["quantity"], 9)
+
+    def _entries(self):
+        with storage._database() as connection:
+            return connection.execute("SELECT entry_id FROM inventory ORDER BY entry_id").fetchall()
 
     def test_newer_schema_is_rejected_without_overwriting_version(self):
         storage.set_metadata("schema_version", "999")

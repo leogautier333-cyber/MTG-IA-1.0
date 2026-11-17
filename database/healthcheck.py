@@ -28,9 +28,11 @@ def check_database():
                 + ", ".join(sorted(missing_tables))
             )
         inconsistent_entries = storage.find_inventory_inconsistencies(connection)
+        invalid_snapshots = storage.find_invalid_price_snapshots(connection)
     return {
         "backend": backend, "table_count": len(present_tables),
         "inconsistent_inventory_entries": inconsistent_entries,
+        "invalid_price_snapshots": invalid_snapshots,
     }
 
 
@@ -52,6 +54,13 @@ def main():
         print(
             "Warning: inventory columns differ from their JSON payload for entry_id(s): "
             + ", ".join(str(entry) for entry in result["inconsistent_inventory_entries"][:20])
+            + ". No data was modified; review these rows manually.",
+            file=sys.stderr,
+        )
+    if result["invalid_price_snapshots"]:
+        print(
+            "Warning: invalid stored price snapshot id(s): "
+            + ", ".join(str(item) for item in result["invalid_price_snapshots"][:20])
             + ". No data was modified; review these rows manually.",
             file=sys.stderr,
         )

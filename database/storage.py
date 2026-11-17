@@ -699,6 +699,17 @@ def _replace_inventory(connection, collection):
     connection.executemany(_INSERT_INVENTORY, [_inventory_row(card) for card in collection])
 
 
+def find_invalid_price_snapshots(connection=None):
+    """Retourne les snapshot_id de prix négatifs ou hors plage, déjà stockés (lecture seule)."""
+    query = """SELECT snapshot_id FROM price_snapshots
+               WHERE price_eur < 0 OR price_eur > 3.4028234663852886e38
+               ORDER BY snapshot_id"""
+    if connection is not None:
+        return [row["snapshot_id"] for row in connection.execute(query).fetchall()]
+    with _database() as active:
+        return [row["snapshot_id"] for row in active.execute(query).fetchall()]
+
+
 def find_inventory_inconsistencies(connection=None):
     """Retourne les entry_id dont les colonnes SQL divergent du payload JSON (lecture seule)."""
     columns = ("scryfall_id", "foil", "language", "condition", "set_code", "collector_number",

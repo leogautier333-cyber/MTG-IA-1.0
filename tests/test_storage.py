@@ -47,6 +47,19 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(result["table_count"], len(storage.REQUIRED_TABLES))
         self.assertEqual(storage.get_metadata("schema_version"), str(storage.SCHEMA_VERSION))
         self.assertEqual(result["inconsistent_inventory_entries"], [])
+        self.assertEqual(result["invalid_price_snapshots"], [])
+
+    def test_healthcheck_reports_legacy_invalid_rows_without_repair(self):
+        storage.record_price_snapshot("a", 2, observed_at="2026-10-10")
+        with storage._database() as connection:
+            for action in ("insert", "update"):
+                connection.execute(f"DROP TRIGGER price_snapshot_validation_{action}")
+            connection.execute("UPDATE price_snapshots SET price_eur = -5")
+        snapshot_id = storage.find_invalid_price_snapshots()
+        self.assertEqual(len(snapshot_id), 1)
+        self.assertEqual(check_database()["invalid_price_snapshots"], snapshot_id)
+        with storage._database() as connection:
+            self.assertEqual(connection.execute("SELECT price_eur FROM price_snapshots").fetchone()[0], -5)
 
     def test_inventory_consistency_check_follows_writes_and_reports_without_repair(self):
         card = {"scryfall_id": "a", "name": "A", "set_code": "tst", "status": "FOR_SALE",

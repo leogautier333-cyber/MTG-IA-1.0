@@ -47,7 +47,7 @@ Le calcul de marge et les totaux monétaires des tableaux de stock, de ventes, d
 
 Les appels Scryfall ont un délai maximal et les erreurs HTTP interrompent l'opération au lieu d'être assimilées à des cartes introuvables. L'import CSV générique refuse les prix négatifs ou non finis et les quantités non entières ou inférieures à un.
 Les écritures de stock, ventes et relevés contrôlent les quantités et montants à la frontière applicative : les quantités doivent être entières et strictement positives ; les prix doivent être finis et non négatifs. Les triggers SQL protègent aussi les colonnes de quantité et de prix de l'inventaire et les prix des relevés contre les écritures directes ; ils ne couvrent pas les champs du payload JSON ni les autres tables.
-Les écritures applicatives dérivent les colonnes SQL du payload JSON dans la même requête. `python -m database.healthcheck` compare en lecture seule les colonnes d'inventaire à leur payload et signale sur stderr les `entry_id` divergents (jusqu'à 20) sans les corriger ni échouer : une divergence introduite hors application doit être examinée manuellement.
+Les écritures applicatives dérivent les colonnes SQL du payload JSON dans la même requête. `python -m database.healthcheck` compare en lecture seule les colonnes d'inventaire à leur payload et signale sur stderr les `entry_id` divergents (jusqu'à 20) sans les corriger ni échouer : une divergence introduite hors application doit être examinée manuellement. Il signale de la même manière les relevés de prix déjà stockés négatifs ou hors plage, que les triggers ne contrôlent pas rétroactivement.
 
 ## Lancer l'application et le suivi
 

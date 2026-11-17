@@ -246,6 +246,7 @@ with patch.object(github_actions, "latest_run", return_value=None) as github:
         assert any(card["scryfall_id"] == "test" for card in inventory.get_collection())
     app.radio(key="main_navigation").set_value("Nexus").run()
     assert not app.exception
+    assert not app.error, [item.value for item in app.error]
     app.radio(key="main_navigation").set_value("Stock & Ventes").run()
     assert not app.exception
     assert any("Tableau de bord" in h.value for h in app.header)

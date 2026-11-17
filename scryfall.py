@@ -14,6 +14,40 @@ def _rate_limit():
     time.sleep(0.1)
 
 
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_ATTEMPTS = 3
+MAX_RETRY_DELAY_SECONDS = 10.0
+
+
+def _retry_delay(response, attempt):
+    try:
+        delay = float(response.headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        delay = 0.5 * 2 ** (attempt - 1)
+    return min(max(delay, 0.0), MAX_RETRY_DELAY_SECONDS)
+
+
+def _send(method, url, **kwargs):
+    """Envoie une requête Scryfall avec une courte reprise sur 429, 5xx et erreurs réseau.
+
+    La réponse finale est renvoyée telle quelle ; l'appelant décide quoi faire d'un 404 ou
+    appelle `raise_for_status()` : une panne durable n'est jamais confondue avec « introuvable »."""
+    send = getattr(requests, method)
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        _rate_limit()
+        try:
+            response = send(url, headers=HEADERS, **kwargs)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == MAX_ATTEMPTS:
+                raise
+            time.sleep(0.5 * 2 ** (attempt - 1))
+            continue
+        if response.status_code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
+            time.sleep(_retry_delay(response, attempt))
+            continue
+        return response
+
+
 def search_card_autocomplete(query: str) -> List[str]:
     """
     Retourne des suggestions de noms de cartes (FR ou EN) pour l'autocomplétion.
@@ -21,9 +55,8 @@ def search_card_autocomplete(query: str) -> List[str]:
     if not query or len(query) < 2:
         return []
 
-    _rate_limit()
     url = f"{BASE_URL}/cards/autocomplete"
-    response = requests.get(url, params={"q": query}, headers=HEADERS, timeout=10)
+    response = _send("get", url, params={"q": query}, timeout=10)
 
     if response.status_code == 404:
         return []
@@ -35,9 +68,8 @@ def get_card_by_name(name: str) -> Optional[Dict[str, Any]]:
     """
     Recherche une carte par son nom (recherche approximative / fuzzy).
     """
-    _rate_limit()
     url = f"{BASE_URL}/cards/named"
-    response = requests.get(url, params={"fuzzy": name}, headers=HEADERS, timeout=10)
+    response = _send("get", url, params={"fuzzy": name}, timeout=10)
 
     if response.status_code == 404:
         return None
@@ -49,10 +81,9 @@ def get_card_prints(oracle_id: str) -> List[Dict[str, Any]]:
     """
     Récupère toutes les éditions/impressions d'une carte à partir de son oracle_id.
     """
-    _rate_limit()
     url = f"{BASE_URL}/cards/search"
     params = {"q": f"oracle_id:{oracle_id}", "unique": "prints"}
-    response = requests.get(url, params=params, headers=HEADERS, timeout=10)
+    response = _send("get", url, params=params, timeout=10)
 
     if response.status_code == 404:
         return []
@@ -68,10 +99,8 @@ def get_cards_by_identifiers(identifiers: List[Dict[str, Any]]) -> Dict[str, Any
     found, not_found = [], []
     for i in range(0, len(identifiers), 75):
         chunk = identifiers[i:i + 75]
-        _rate_limit()
-        response = requests.post(
-            f"{BASE_URL}/cards/collection", json={"identifiers": chunk}, headers=HEADERS,
-            timeout=20,
+        response = _send(
+            "post", f"{BASE_URL}/cards/collection", json={"identifiers": chunk}, timeout=20,
         )
         response.raise_for_status()
         data = response.json()
@@ -95,11 +124,8 @@ def get_cards_batch(scryfall_ids: List[str]) -> List[Dict[str, Any]]:
         chunk = scryfall_ids[i:i + chunk_size]
         identifiers = [{"id": card_id} for card_id in chunk]
 
-        _rate_limit()
         url = f"{BASE_URL}/cards/collection"
-        response = requests.post(
-            url, json={"identifiers": identifiers}, headers=HEADERS, timeout=20
-        )
+        response = _send("post", url, json={"identifiers": identifiers}, timeout=20)
 
         response.raise_for_status()
         data = response.json()

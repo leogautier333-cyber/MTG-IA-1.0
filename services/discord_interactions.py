@@ -1,9 +1,9 @@
 import asyncio
 import os
 
-import data_manager
 import scryfall
 from modules.market_analyzer import portfolio_summary
+from services import inventory
 
 
 def create_bot():
@@ -38,7 +38,7 @@ def create_bot():
 
     @bot.tree.command(name="portfolio", description="Afficher la synthèse du portefeuille")
     async def portfolio_command(interaction: discord.Interaction):
-        summary = portfolio_summary(data_manager.get_collection())
+        summary = portfolio_summary(inventory.get_collection())
         unrealized = (f"{summary['unrealized_profit']:.2f} €"
                       if summary["held_unknown_cost"] < summary["for_sale_count"] else "indisponible")
         realized = (f"{summary['realized_profit']:.2f} €"
@@ -67,7 +67,7 @@ def create_bot():
         if not card:
             await interaction.followup.send("Carte introuvable dans Scryfall.", ephemeral=True)
             return
-        watchlist = data_manager.get_watchlist()
+        watchlist = inventory.get_watchlist()
         if any(item.get("scryfall_id") == card.get("id") for item in watchlist):
             await interaction.followup.send(f"{card['name']} est déjà suivie.", ephemeral=True)
             return
@@ -77,7 +77,7 @@ def create_bot():
             "language": "FR", "condition": "NM",
             "max_buy_price": prix_max,
         })
-        data_manager.save_watchlist(watchlist)
+        inventory.save_watchlist(watchlist)
         await interaction.followup.send(f"{card['name']} ajoutée à la watchlist.", ephemeral=True)
 
     @bot.event

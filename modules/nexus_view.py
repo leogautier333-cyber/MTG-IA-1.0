@@ -1,7 +1,6 @@
 import streamlit as st
 
 import data_manager
-from database import market_data, storage
 from modules.local_assistant import answer_local_query
 from services.market_monitor import refresh_watchlist_prices
 from services.source_health import get_source_statuses
@@ -42,6 +41,7 @@ def render_nexus_tab():
     if st.button("Actualiser les prix de la watchlist", key="nexus_refresh_prices"):
         try:
             st.session_state["nexus_market_result"] = refresh_watchlist_prices(watchlist, collection)
+            data_manager.clear_cache()
         except Exception as error:
             st.session_state["nexus_market_error"] = str(error)
 
@@ -63,6 +63,7 @@ def render_nexus_tab():
     if st.button("Analyser Scryfall et r/mtgfinance", key="nexus_scan_spoilers"):
         try:
             st.session_state["nexus_spoiler_result"] = scan_spoilers_and_trends(watchlist, collection)
+            data_manager.clear_cache()
         except Exception as error:
             st.session_state["nexus_spoiler_error"] = str(error)
     spoiler_error = st.session_state.pop("nexus_spoiler_error", None)
@@ -106,8 +107,8 @@ def render_nexus_tab():
         )
         tracked_variants.setdefault(variant_key, card)
     buyout_rows = []
-    points_by_variant = storage.get_price_points_batch(tracked_variants)
-    histories = market_data.get_edhrec_histories(key[0] for key in tracked_variants)
+    points_by_variant = data_manager.get_price_points_batch(tuple(tracked_variants))
+    histories = data_manager.get_edhrec_histories(tuple(key[0] for key in tracked_variants))
     for key, card in tracked_variants.items():
         result = analyze_snapshot_buyout(
             card["scryfall_id"], foil=card.get("foil", False),
@@ -134,12 +135,13 @@ def render_nexus_tab():
     if st.button("Évaluer les alertes échues", key="nexus_evaluate_alerts"):
         try:
             st.session_state["nexus_alert_evaluation"] = evaluate_alerts()
+            data_manager.clear_cache()
         except Exception as error:
             st.error(f"Échec de l'évaluation : {error}")
     evaluation_result = st.session_state.get("nexus_alert_evaluation")
     if evaluation_result:
         st.caption(f"{evaluation_result['evaluations_written']} résultat(s) à +7/+30 jours enregistré(s).")
-    metrics = data_manager.storage.get_alert_metrics()
+    metrics = data_manager.get_alert_metrics()
     if metrics:
         st.dataframe(
             [{

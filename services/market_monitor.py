@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 import hashlib
 
 import scryfall
-import data_manager
 from database import storage
 from modules.market_analyzer import detect_watchlist_drops
+from services import inventory
 
 
 def _variant_key(card):
@@ -15,7 +15,7 @@ def _variant_key(card):
 
 
 def get_watchlist_observations(watchlist=None):
-    watchlist = watchlist if watchlist is not None else data_manager.get_watchlist()
+    watchlist = watchlist if watchlist is not None else inventory.get_watchlist()
     return storage.get_variant_price_histories_batch(
         _variant_key(card) for card in watchlist if card.get("scryfall_id")
     )
@@ -34,10 +34,10 @@ def refresh_watchlist_prices(watchlist, collection):
     try:
         current_cards = scryfall.get_cards_batch(monitored_ids)
     except Exception as error:
-        data_manager.storage.record_source_health("scryfall", False, str(error))
+        storage.record_source_health("scryfall", False, str(error))
         raise
     if not current_cards:
-        data_manager.storage.record_source_health(
+        storage.record_source_health(
             "scryfall", False, "Aucun prix retourné pour les impressions suivies."
         )
         return {"observed": 0, "alerts": [], "message": "Scryfall n'a renvoyé aucun prix; vérifie la connexion puis réessaie."}
@@ -55,7 +55,7 @@ def refresh_watchlist_prices(watchlist, collection):
             raw_price = prices.get("eur_foil" if foil else "eur")
             if raw_price is None:
                 continue
-            data_manager.record_price_snapshot(
+            inventory.record_price_snapshot(
                 card_id, raw_price, foil=foil,
                 language=watched_card.get("language", "FR"),
                 condition=watched_card.get("condition", "NM"),
@@ -63,7 +63,7 @@ def refresh_watchlist_prices(watchlist, collection):
             )
             observed_count += 1
 
-    data_manager.storage.record_source_health("scryfall", True, "Prix watchlist actualisés.")
+    storage.record_source_health("scryfall", True, "Prix watchlist actualisés.")
     tracked = get_watchlist_observations(watchlist)
     alerts = detect_watchlist_drops(watchlist, collection, tracked)
     for alert in alerts:
@@ -83,7 +83,7 @@ def refresh_watchlist_prices(watchlist, collection):
             "language": watched_card.get("language", "FR"),
             "condition": watched_card.get("condition", "NM"),
         }
-        data_manager.storage.record_alert(
+        storage.record_alert(
             alert_id, "PRICE_DROP", watched_card.get("scryfall_id"), now,
             storage_payload,
         )

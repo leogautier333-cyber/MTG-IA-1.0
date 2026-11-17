@@ -6,7 +6,7 @@ Application Streamlit pour gérer un stock de cartes Magic : prix, marges, alert
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
+.\.venv\Scripts\pip install -r requirements.txt -c constraints.txt
 $env:DATABASE_URL = "postgresql://..."
 .\.venv\Scripts\streamlit run app.py
 ```
@@ -38,8 +38,16 @@ pour l'affichage sont mis en cache jusqu'à 60 secondes.
 - `stock_analysis.yml` : analyse des prix, spoilers, Reddit, alertes (07h et 19h UTC).
 - `weekly_report.yml` : rapport hebdomadaire (lundi).
 - `backup.yml` : sauvegarde chiffrée (dimanche).
+- `healthcheck.yml` : contrôle manuel de la base (applique les migrations en attente, affiche la version du schéma et signale sans les modifier les données anciennes invalides). Même contrôle en local : `python -m database.healthcheck`.
+- `tests.yml` : tests SQLite puis PostgreSQL jetable à chaque push.
 
-Tous peuvent être lancés à la main depuis l'onglet « Prix & Alertes » de l'application.
+Les dépendances des workflows sont dans `requirements-actions.txt`, avec les versions testées de `constraints.txt` ; un test vérifie que chaque workflow installe ce que sa commande importe.
+
+Les trois premiers peuvent être lancés à la main depuis l'onglet « Prix & Alertes » de l'application.
+
+## Navigation de l'interface
+
+Par défaut, tous les onglets sont exécutés à chaque interaction. Avec `MTG_LAZY_NAVIGATION = "true"` (secret ou variable d'environnement), un sélecteur remplace les onglets et seul l'écran choisi est exécuté : l'interface est plus rapide, mais un champ non validé peut être réinitialisé quand on change d'écran.
 
 ## Synchroniser le stock Cardmarket
 

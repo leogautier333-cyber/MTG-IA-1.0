@@ -5,8 +5,9 @@ from pathlib import Path
 
 import requests
 
-import data_manager
 import scryfall
+from database import storage
+from services import inventory
 
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -84,7 +85,7 @@ def _create_market_predictions(collection, watchlist, now):
         card for card in watchlist
         if card.get("scryfall_id") and card.get("scryfall_id") not in owned_ids
     ]
-    histories = data_manager.storage.get_variant_price_histories_batch(
+    histories = storage.get_variant_price_histories_batch(
         _variant_key(card) for card in relevant_cards
     )
 
@@ -194,8 +195,8 @@ def _create_market_predictions(collection, watchlist, now):
 
 def analyze_market_and_predict():
     """Actualise les prix suivis, détecte les mouvements et persiste les alertes."""
-    collection = data_manager.get_collection()
-    watchlist = data_manager.get_watchlist()
+    collection = inventory.get_collection()
+    watchlist = inventory.get_watchlist()
     tracked_cards = {}
     for card in [*collection, *watchlist]:
         card_id = card.get("scryfall_id")
@@ -213,10 +214,10 @@ def analyze_market_and_predict():
     if card_ids:
         try:
             updated_cards = scryfall.get_cards_batch(card_ids)
-            data_manager.storage.record_source_health("scryfall", True)
+            storage.record_source_health("scryfall", True)
         except requests.RequestException as error:
             print(f"Impossible d'actualiser les prix Scryfall : {error}")
-            data_manager.storage.record_source_health("scryfall", False, str(error))
+            storage.record_source_health("scryfall", False, str(error))
             updated_cards = []
 
         for card_data in updated_cards:
@@ -233,7 +234,7 @@ def analyze_market_and_predict():
                 price = eur_foil if foil else eur
                 if price is None:
                     continue
-                data_manager.record_price_snapshot(
+                inventory.record_price_snapshot(
                     card_id, price, foil=foil, language=language, condition=condition,
                     observed_at=timestamp.isoformat(timespec="seconds"),
                 )
@@ -248,7 +249,7 @@ def analyze_market_and_predict():
     )
     if predictions:
         for prediction in predictions:
-            data_manager.storage.record_alert(
+            storage.record_alert(
                 prediction["prediction_id"], prediction["category"],
                 prediction["scryfall_id"], prediction["timestamp"], prediction,
             )

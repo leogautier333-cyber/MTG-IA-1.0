@@ -22,6 +22,8 @@ Organisation du code :
 - `modules/search_view.py` : recherche Scryfall et préparation des imports génériques ou Cardmarket.
 - `modules/stock_view.py` : tableau de bord, filtres, édition et export/restauration du stock.
 - `agents/tools.py` lit le stock par le service métier, sans importer la façade ou le cache Streamlit.
+- Les couches `database/`, `services/`, `agents/`, `ai_engine.py` et `discord_bot.py` n'importent ni Streamlit ni `data_manager` ; seuls les écrans (`app.py`, `modules/`) passent par la façade en cache, qui invalide son cache après chaque écriture ou action Nexus. Le moniteur d'alertes n'utilise que des interfaces publiques de `database/` (`storage.transaction()`, `storage.open_connection()`, fonctions `*_with(connection, …)`). `tests/test_architecture.py` vérifie ces deux règles.
+- `scryfall.py` envoie toutes ses requêtes par une fonction commune : trois tentatives au plus sur 429, 5xx, coupure réseau ou délai dépassé (`Retry-After` respecté, attente plafonnée à 10 s). Un 404 n'est jamais relancé et une panne durable lève une erreur au lieu d'être confondue avec une carte introuvable.
 
 Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les cartes vendues et les cartes qui ne figurent pas dans l'inventaire ne sont jamais demandées à Scryfall par le moniteur de phase 1.
 

@@ -107,10 +107,10 @@ class PostgresAdapterTests(unittest.TestCase):
     def test_analysis_batch_writes_use_postgres_placeholders(self):
         fake_connection = FakeConnection()
         connection = storage._DatabaseConnection(fake_connection, "postgres")
-        market_data._record_demand_snapshots(connection, {"card": 123}, "2026-11-13")
-        storage._record_stock_snapshots(connection, [("card", False, 2.5)],
-                                        "2026-11-13T10:00:00+00:00")
-        storage._upsert_price_alerts(connection, [{
+        market_data.record_demand_snapshots_with(connection, {"card": 123}, "2026-11-13")
+        storage.record_stock_snapshots_with(connection, [("card", False, 2.5)],
+                                            "2026-11-13T10:00:00+00:00")
+        storage.upsert_price_alerts_with(connection, [{
             "id": "test", "status": "pending", "created_at": "2026-11-13",
         }])
         self.assertEqual(len(fake_connection.statements), 3)

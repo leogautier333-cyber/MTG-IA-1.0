@@ -32,7 +32,7 @@ ANALYSIS_LOCK_ID = 734526419
 @contextmanager
 def _analysis_lock():
     if storage.get_database_backend() == "postgres":
-        connection = storage._connect()
+        connection = storage.open_connection()
         try:
             acquired = connection.execute(
                 "SELECT pg_try_advisory_xact_lock(?) AS acquired", (ANALYSIS_LOCK_ID,)
@@ -524,13 +524,11 @@ def _analyze_stock_prices(session=requests, events=()):
             continue
         valid_positions.append((position, float(raw_price)))
 
-    with storage._database() as connection:
-        known_alert_ids = {
-            row["alert_id"] for row in connection.execute("SELECT alert_id FROM price_alerts").fetchall()
-        }
-        previous_prices = storage._get_latest_stock_snapshots(connection, card_ids)
-        market_data._record_demand_snapshots(connection, ranks, observed_at[:10])
-        demand_histories = market_data._get_edhrec_histories(connection, card_ids)
+    with storage.transaction() as connection:
+        known_alert_ids = storage.get_price_alert_ids_with(connection)
+        previous_prices = storage.get_latest_stock_snapshots_with(connection, card_ids)
+        market_data.record_demand_snapshots_with(connection, ranks, observed_at[:10])
+        demand_histories = market_data.get_edhrec_histories_with(connection, card_ids)
         for position, current_price in valid_positions:
             previous = previous_prices.get((position["scryfall_id"], position["foil"]))
             if position.get("target_price") and current_price >= position["target_price"]:
@@ -543,7 +541,7 @@ def _analyze_stock_prices(session=requests, events=()):
                 first_observations.append(f"{position['name']} ({position['set_code']})")
                 continue
             change_pct = (current_price - previous["price_eur"]) / previous["price_eur"] * 100
-            popularity_delta = stock_advisor._popularity_delta_from_history(
+            popularity_delta = stock_advisor.popularity_delta_from_history(
                 demand_histories[position["scryfall_id"]]
             )
             if _price_trend(previous["price_eur"], current_price) == "STABLE":
@@ -562,13 +560,13 @@ def _analyze_stock_prices(session=requests, events=()):
                 new_alerts.append(alert)
                 known_alert_ids.add(alert["id"])
 
-        storage._record_stock_snapshots(
+        storage.record_stock_snapshots_with(
             connection,
             [(position["scryfall_id"], position["foil"], price)
              for position, price in valid_positions],
             observed_at,
         )
-        storage._upsert_price_alerts(connection, new_alerts)
+        storage.upsert_price_alerts_with(connection, new_alerts)
 
     persisted_at = time.perf_counter()
     notifications_sent = _deliver_pending_alerts(set(positions), session=session)

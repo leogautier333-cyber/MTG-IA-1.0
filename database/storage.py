@@ -647,6 +647,20 @@ def _database():
         connection.close()
 
 
+def transaction():
+    """Connexion initialisée validée en fin de bloc, annulée en cas d'exception."""
+    return _database()
+
+
+def open_connection():
+    """Connexion brute que l'appelant ferme lui-même (par exemple pour un verrou consultatif)."""
+    return _connect()
+
+
+def get_price_alert_ids_with(connection):
+    return {row["alert_id"] for row in connection.execute("SELECT alert_id FROM price_alerts").fetchall()}
+
+
 def validate_inventory_quantity(value):
     try:
         quantity = Decimal(str(value))
@@ -1049,7 +1063,7 @@ def _upsert_price_alert(connection, alert):
     connection.execute(_UPSERT_PRICE_ALERT, _price_alert_values(alert))
 
 
-def _upsert_price_alerts(connection, alerts):
+def upsert_price_alerts_with(connection, alerts):
     if alerts:
         connection.executemany(_UPSERT_PRICE_ALERT, [_price_alert_values(alert) for alert in alerts])
 
@@ -1057,7 +1071,7 @@ def _upsert_price_alerts(connection, alerts):
 def save_price_alerts(alerts):
     """Insère ou met à jour les alertes de variation de prix (clé : alert['id'])."""
     with _database() as connection:
-        _upsert_price_alerts(connection, alerts)
+        upsert_price_alerts_with(connection, alerts)
 
 
 def get_watchlist():
@@ -1133,7 +1147,7 @@ def get_variant_price_history(scryfall_id, foil=False, language="FR", condition=
     ]
 
 
-def _get_latest_stock_snapshots(connection, card_ids):
+def get_latest_stock_snapshots_with(connection, card_ids):
     result = {}
     for start in range(0, len(card_ids), 500):
         chunk = card_ids[start:start + 500]
@@ -1157,7 +1171,7 @@ def _get_latest_stock_snapshots(connection, card_ids):
     return result
 
 
-def _record_stock_snapshots(connection, records, observed_at):
+def record_stock_snapshots_with(connection, records, observed_at):
     if records:
         connection.executemany(
             """INSERT INTO price_snapshots(

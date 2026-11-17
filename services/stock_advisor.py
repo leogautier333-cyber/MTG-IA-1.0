@@ -16,16 +16,16 @@ BAN_EVENTS = {"BAN_RUMOR"}
 
 def popularity_delta_pct(scryfall_id, today=None):
     """Évolution de la popularité EDHREC (positif = plus populaire) sur ~30 jours, ou None."""
-    return _popularity_delta_from_history(market_data.get_edhrec_history(scryfall_id), today)
+    return popularity_delta_from_history(market_data.get_edhrec_history(scryfall_id), today)
 
 
 def popularity_deltas_pct(scryfall_ids, today=None):
     histories = market_data.get_edhrec_histories(scryfall_ids)
-    return {card_id: _popularity_delta_from_history(history, today)
+    return {card_id: popularity_delta_from_history(history, today)
             for card_id, history in histories.items()}
 
 
-def _popularity_delta_from_history(history, today=None):
+def popularity_delta_from_history(history, today=None):
     today = today or date.today()
     cutoff = today - timedelta(days=POPULARITY_WINDOW_DAYS)
     dated = []

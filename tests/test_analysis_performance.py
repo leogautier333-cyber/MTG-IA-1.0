@@ -92,7 +92,7 @@ class AnalysisPerformanceTests(unittest.TestCase):
         inventory.record_price_snapshot("x", 10, observed_at="2026-10-01T10:00:00+00:00")
         with patch.object(phase_one_monitor.scryfall, "get_cards_batch", return_value=[
             {"id": "x", "prices": {"eur": "11"}, "edhrec_rank": 1000}
-        ]), patch.object(storage, "_upsert_price_alerts", side_effect=RuntimeError("test failure")), \
+        ]),         patch.object(storage, "upsert_price_alerts_with", side_effect=RuntimeError("test failure")), \
              patch.object(phase_one_monitor.requests, "post") as post:
             with self.assertRaisesRegex(RuntimeError, "test failure"):
                 phase_one_monitor.analyze_stock_prices()
@@ -104,8 +104,8 @@ class AnalysisPerformanceTests(unittest.TestCase):
     def test_more_than_500_cards_queries_all_positions(self):
         with storage._database() as connection:
             records = [(f"card-{index}", False, index + 1) for index in range(501)]
-            storage._record_stock_snapshots(connection, records, "2026-10-01T10:00:00+00:00")
-            latest = storage._get_latest_stock_snapshots(
+            storage.record_stock_snapshots_with(connection, records, "2026-10-01T10:00:00+00:00")
+            latest = storage.get_latest_stock_snapshots_with(
                 connection, [f"card-{index}" for index in range(501)]
             )
         self.assertEqual(len(latest), 501)

@@ -198,10 +198,10 @@ def get_edhrec_histories(scryfall_ids):
     if not ids:
         return {}
     with _database() as connection:
-        return _get_edhrec_histories(connection, ids)
+        return get_edhrec_histories_with(connection, ids)
 
 
-def _get_edhrec_histories(connection, ids):
+def get_edhrec_histories_with(connection, ids):
     histories = {card_id: [] for card_id in ids}
     for start in range(0, len(ids), 500):
         chunk = ids[start:start + 500]
@@ -231,7 +231,7 @@ def _get_edhrec_histories(connection, ids):
     return histories
 
 
-def _record_demand_snapshots(connection, records, snapshot_day):
+def record_demand_snapshots_with(connection, records, snapshot_day):
     values = []
     for card_id, value in records.items():
         rank = _as_optional_int(value)

@@ -6,7 +6,7 @@ from database import storage
 def check_database():
     backend = storage.get_database_backend()
     storage.initialize_database()
-    with storage._database() as connection:
+    with storage.transaction() as connection:
         result = connection.execute("SELECT 1 AS ready").fetchone()
         if not result or result["ready"] != 1:
             raise storage.DatabaseConnectionError("PostgreSQL health query returned an unexpected result.")

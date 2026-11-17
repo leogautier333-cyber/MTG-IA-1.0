@@ -32,6 +32,7 @@ def check_database():
         sub_cent_amounts = storage.find_sub_cent_amounts(connection)
     return {
         "backend": backend, "table_count": len(present_tables),
+        "schema_version": storage.get_metadata("schema_version"),
         "inconsistent_inventory_entries": inconsistent_entries,
         "invalid_price_snapshots": invalid_snapshots,
         "sub_cent_amounts": sub_cent_amounts,
@@ -51,7 +52,10 @@ def main():
             file=sys.stderr,
         )
         return 1
-    print(f"Database ready: backend={result['backend']}, tables={result['table_count']}")
+    print(
+        f"Database ready: backend={result['backend']}, tables={result['table_count']}, "
+        f"schema_version={result['schema_version']}"
+    )
     if result["inconsistent_inventory_entries"]:
         print(
             "Warning: inventory columns differ from their JSON payload for entry_id(s): "

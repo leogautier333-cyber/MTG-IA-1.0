@@ -1,0 +1,32 @@
+name: Contrôle de la base
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: database-healthcheck
+  cancel-in-progress: false
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-actions.txt -c constraints.txt
+
+      - name: Check database and apply pending migrations
+        run: python -m database.healthcheck
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+permissions:
+  contents: read

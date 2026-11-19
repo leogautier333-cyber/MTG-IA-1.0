@@ -127,7 +127,7 @@ def report_embed(report):
         {"name": "Plus fortes hausses (7 j)", "value": _mover_lines(report["risers"]), "inline": False},
         {"name": "Plus fortes baisses (7 j)", "value": _mover_lines(report["fallers"]), "inline": False},
     ]
-    return "[RAPPORT HEBDOMADAIRE] Magic Trading & Profit Manager", "Résumé de ta semaine.", fields
+    return "[RAPPORT HEBDOMADAIRE] Carnet de Mana", "Résumé de ta semaine.", fields
 
 
 def send_weekly_report(session=requests, today=None):

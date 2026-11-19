@@ -41,11 +41,6 @@ def price_history_frame(history):
 
 def render_prices_tab():
     st.header("Courbes de prix & alertes du stock")
-    st.caption(
-        "Entre deux relevés : alerte de baisse à −10 % ou moins, de hausse à +10 % ou plus, "
-        "et de stagnation entre ces seuils. Une alerte de stagnation par carte et finition "
-        "est envoyée au maximum par jour UTC."
-    )
 
     action_col, test_col = st.columns(2)
     if action_col.button("Analyser le stock maintenant", type="primary"):
@@ -144,12 +139,6 @@ def render_prices_tab():
     st.subheader("Valeur du stock dans le temps")
     portfolio_prices = data_manager.get_price_history()
     history_events = data_manager.get_inventory_events() if portfolio_prices else []
-    if history_events:
-        st.caption(
-            f"Mouvements enregistrés depuis le {history_events[0]['occurred_at'][:10]} (UTC). "
-            "Avant cette date, la courbe utilise les quantités et coûts actuels : elle est approximative. "
-            "Les coûts inconnus et les cartes sans prix disponible sont exclus des totaux correspondants."
-        )
     value_points = portfolio_history.value_series(
         data_manager.get_collection(), portfolio_prices, history_events
     )

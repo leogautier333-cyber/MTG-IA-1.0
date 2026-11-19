@@ -87,7 +87,7 @@ def _send_webhook(title, description, session=requests, webhook_url=None, fields
 
 def send_test_alert(session=requests, webhook_url=None):
     _send_webhook(
-        "Test · Magic Trading & Profit Manager",
+        "Test · Carnet de Mana",
         "Alerte test envoyée manuellement. Le canal Discord reçoit bien les notifications de l'application.",
         session=session,
         webhook_url=webhook_url,

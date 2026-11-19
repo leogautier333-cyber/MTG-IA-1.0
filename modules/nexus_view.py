@@ -10,8 +10,7 @@ from services.spoiler_watcher import scan_spoilers_and_trends
 
 
 def render_nexus_tab():
-    st.header("Magic Intelligence Nexus")
-    st.caption("Analyses locales et sources externes consultées à la demande.")
+    st.header("Nexus")
 
     st.subheader("Santé des sources")
     health_columns = st.columns(3)
@@ -91,10 +90,6 @@ def render_nexus_tab():
             )
 
     st.subheader("Sentinelle anti-buyout")
-    st.info(
-        "Indice proxy calculé à partir des snapshots de prix, des événements Scryfall "
-        "et de l’évolution du rang EDHREC. Ce score signale une anomalie, pas une preuve de manipulation."
-    )
     tracked_variants = {}
     for card in [*watchlist, *collection]:
         scryfall_id = card.get("scryfall_id")
@@ -250,7 +245,6 @@ def render_nexus_tab():
         if deck_analysis["missing"]:
             st.dataframe(deck_analysis["missing"], hide_index=True, use_container_width=True)
         if deck_analysis["excluded_from_deck"]:
-            st.caption("Cartes de ton stock absentes de cette liste (ceci ne prouve pas qu'elles ne sont jamais jouées).")
             st.dataframe(
                 [{"Carte": card.get("name"), "Édition": card.get("set_code"), "Quantité": card.get("quantity", 1)}
                  for card in deck_analysis["excluded_from_deck"]],

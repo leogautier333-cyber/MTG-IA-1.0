@@ -23,11 +23,6 @@ def render_search_tab():
     st.header("Rechercher et Ajouter une carte")
 
     with st.expander("Synchroniser mon stock Cardmarket (CSV complet)"):
-        st.caption(
-            "Exporte ton stock depuis Cardmarket puis dépose le fichier ici. Après contrôle et confirmation, "
-            "le fichier remplace les cartes en vente ; les ventes et l'historique restent conservés. "
-            "Les cartes retirées ne sont pas déclarées vendues."
-        )
         cardmarket_file = st.file_uploader(
             "Export complet Cardmarket", type=["csv"], key="cardmarket_sync_file"
         )
@@ -108,7 +103,6 @@ def render_search_tab():
             )
 
     with st.expander("Importer un CSV générique (tableur…)"):
-        st.caption("Colonnes reconnues : nom, édition, numéro, quantité, prix d'achat, prix de vente, état, langue, foil. Les cartes sont ajoutées au stock sans rien remplacer.")
         csv_file = st.file_uploader("Fichier CSV", type=["csv"], key="csv_import_file")
         if csv_file is not None:
             try:

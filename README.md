@@ -1,4 +1,4 @@
-# Magic Trading & Profit Manager
+# Carnet de Mana
 
 Application Streamlit pour gérer un stock de cartes Magic : prix, marges, alertes Discord et verdicts à règles simples (aucune IA générative). Les données sont dans PostgreSQL (Neon).
 

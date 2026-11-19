@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 
 from contextlib import nullcontext
 import streamlit as st
+from PIL import Image
 from streamlit.errors import StreamlitSecretNotFoundError
 
 # Root-level Streamlit secrets must be loaded before services read the environment.
@@ -21,15 +23,15 @@ from modules.theme import apply_theme
 # Configuration de la page Streamlit
 # -------------------------------------------------------------------
 st.set_page_config(
-    page_title="MTG // Trading Terminal",
-    page_icon="🃏",
+    page_title="Carnet de Mana",
+    page_icon=Image.open(Path(__file__).parent / "assets" / "favicon.png"),
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 apply_theme()
 
-st.title("Magic Trading // Profit Terminal")
+st.title("Carnet de Mana")
 
 tab_names = [
     "Stock & Ventes",

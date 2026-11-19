@@ -75,14 +75,8 @@ def render_stock_tab():
             "Prix couverts", f"{metrics['coverage_pct']:.0f} %",
             f"{metrics['missing_prices']} sans prix · {metrics['stale_prices']} anciens (> 7 j)",
         )
-        if metrics["missing_prices"] or metrics["stale_prices"]:
-            st.caption(
-                "Les cartes sans relevé ne sont pas incluses dans cette valeur; "
-                "les prix sont des références Scryfall indicatives."
-            )
         exposure_col, stress_col = st.columns([3, 2])
         with exposure_col:
-            st.caption("Exposition par carte · les 10 plus grosses positions")
             top_positions = metrics["positions"][:10]
             if top_positions:
                 exposure_frame = pd.DataFrame(top_positions)
@@ -96,7 +90,6 @@ def render_stock_tab():
                     use_container_width=True,
                 )
             if metrics["set_exposure"]:
-                st.caption("Exposition par édition")
                 st.dataframe(
                     [{
                         "Édition": set_code, "Valeur (€)": round(value, 2),
@@ -106,7 +99,6 @@ def render_stock_tab():
                     hide_index=True, use_container_width=True,
                 )
         with stress_col:
-            st.caption("Scénarios sur les prix de marché disponibles (simulation, pas une prévision)")
             if metrics["coverage_pct"]:
                 st.dataframe(
                     [{
@@ -126,7 +118,7 @@ def render_stock_tab():
     if not collection:
         st.info("Aucune carte enregistrée dans ton stock pour le moment.")
     else:
-        with st.container(border=True):
+        with st.container(border=True, key="frame_filters"):
             st.subheader("🔍 Filtres et Options d'affichage")
             filter_status, filter_view = st.columns([1.25, 1])
             with filter_status:
@@ -188,7 +180,7 @@ def render_stock_tab():
         st.divider()
 
         if filtered_cards:
-            with st.container(border=True):
+            with st.container(border=True, key="frame_edit"):
                 st.caption("Édition rapide")
                 edit_position = st.selectbox(
                     "Carte à modifier",
@@ -246,7 +238,7 @@ def render_stock_tab():
                     img_url = scryfall_data["card_faces"][0].get("image_uris", {}).get("normal")
 
                 with cols[idx % cols_per_row]:
-                    with st.container(border=True):
+                    with st.container(border=True, key=f"frame_card_{idx}"):
                         if img_url:
                             st.image(img_url, width="stretch")
                         else:

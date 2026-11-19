@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-IMPORT_NAMES = {"psycopg-binary": "psycopg", "discord.py": "discord"}
+IMPORT_NAMES = {"psycopg-binary": "psycopg"}
 
 
 def _requirement_modules(text):

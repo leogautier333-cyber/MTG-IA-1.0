@@ -1,13 +1,3 @@
-from decimal import Decimal
-from itertools import combinations
-
-from services.money import decimal_amount
-from services.portfolio_analytics import portfolio_summary as _portfolio_summary
-
-def portfolio_summary(collection):
-    return _portfolio_summary(collection)
-
-
 def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15.0):
     owned_ids = {card.get("scryfall_id") for card in collection}
     alerts = []
@@ -40,22 +30,3 @@ def detect_watchlist_drops(watchlist, collection, observations, threshold_pct=15
                 "currency_source": "Scryfall EUR",
             })
     return alerts
-
-
-def suggest_exchange_lot(collection, target_value, max_cards=3, max_candidates=24):
-    candidates = [
-        card for card in collection
-        if card.get("status") == "FOR_SALE" and float(card.get("selling_price") or 0) > 0
-    ][:max_candidates]
-    target = decimal_amount(target_value)
-    options = []
-    for size in range(1, min(max_cards, len(candidates)) + 1):
-        for lot in combinations(candidates, size):
-            value = sum((decimal_amount(card.get("selling_price") or 0) for card in lot), Decimal("0"))
-            options.append((abs(value - target), value, lot))
-    options.sort(key=lambda option: (option[0], len(option[2])))
-    return [
-        {"difference": float(difference), "value": float(value),
-         "cards": [card.get("name", "Carte") for card in lot]}
-        for difference, value, lot in options[:3]
-    ]

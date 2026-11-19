@@ -60,13 +60,8 @@ class CentAmountTests(unittest.TestCase):
         self.assertEqual(storage.get_price_history()["a"]["2026-10-10"]["eur"], 1.01)
 
     def test_decimal_helpers_keep_money_exact(self):
-        from modules import market_analyzer
         from services import alert_triage, deck_importer
 
-        collection = [{"name": name, "status": "FOR_SALE", "selling_price": price}
-                      for name, price in (("A", 0.1), ("B", 0.2), ("C", 9.99))]
-        lots = market_analyzer.suggest_exchange_lot(collection, 0.3, max_cards=2)
-        self.assertEqual((lots[0]["cards"], lots[0]["difference"], lots[0]["value"]), (["A", "B"], 0.0, 0.3))
         with patch("scryfall.get_card_by_name", return_value={"prices": {"eur": "0.10"}}):
             analysis = deck_importer.analyze_decklist([{"name": "Missing", "quantity": 3}], [])
         self.assertEqual(analysis["estimated_acquisition_cost_eur"], 0.3)

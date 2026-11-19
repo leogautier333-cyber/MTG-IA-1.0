@@ -212,7 +212,7 @@ if active_tab is None or active_tab == "Bilan des ventes":
 
 
 # ===================================================================
-# TAB 5 : NEXUS (watchlist, signaux, backtesting, assistant)
+# TAB 5 : NEXUS (watchlist, signaux, backtesting, decklist)
 # ===================================================================
 if active_tab is None or active_tab == "Nexus":
     with tab_nexus:

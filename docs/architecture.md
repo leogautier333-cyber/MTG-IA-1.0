@@ -16,13 +16,12 @@ Organisation du code :
 - `services/inventory.py` : logique métier du stock, sans Streamlit.
 - `data_manager.py` : façade Streamlit (lectures en cache 60 s, écritures qui invalident le cache).
 - `services/phase_one_monitor.py` : analyse des prix et alertes Discord.
-- `modules/` et le reste de `services/` : fonctions « Nexus » (watchlist, signaux, backtesting, assistant), affichées dans l'onglet « Nexus » de l'interface.
+- `modules/` et le reste de `services/` : fonctions « Nexus » (watchlist, signaux, backtesting, import de decklist), affichées dans l'onglet « Nexus » de l'interface.
 - `modules/sales_view.py` : affichage du bilan des ventes, alimenté par les services métier et la façade de lecture.
 - `modules/prices_view.py` : affichage des prix, alertes et actions GitHub, avec bouton Discord isolé par fragment.
 - `modules/search_view.py` : recherche Scryfall et préparation des imports génériques ou Cardmarket.
 - `modules/stock_view.py` : tableau de bord, filtres, édition et export/restauration du stock.
-- `agents/tools.py` lit le stock par le service métier, sans importer la façade ou le cache Streamlit.
-- Les couches `database/`, `services/`, `agents/`, `ai_engine.py` et `discord_bot.py` n'importent ni Streamlit ni `data_manager` ; seuls les écrans (`app.py`, `modules/`) passent par la façade en cache, qui invalide son cache après chaque écriture ou action Nexus. Le moniteur d'alertes n'utilise que des interfaces publiques de `database/` (`storage.transaction()`, `storage.open_connection()`, fonctions `*_with(connection, …)`). `tests/test_architecture.py` vérifie ces deux règles.
+- Les couches `database/` et `services/` ainsi que `scryfall.py` n'importent ni Streamlit ni `data_manager` ; seuls les écrans (`app.py`, `modules/`) passent par la façade en cache, qui invalide son cache après chaque écriture ou action Nexus. Le moniteur d'alertes n'utilise que des interfaces publiques de `database/` (`storage.transaction()`, `storage.open_connection()`, fonctions `*_with(connection, …)`). `tests/test_architecture.py` vérifie ces deux règles.
 - `scryfall.py` envoie toutes ses requêtes par une fonction commune : trois tentatives au plus sur 429, 5xx, coupure réseau ou délai dépassé (`Retry-After` respecté, attente plafonnée à 10 s). Un 404 n'est jamais relancé et une panne durable lève une erreur au lieu d'être confondue avec une carte introuvable.
 
 Seules les entrées `FOR_SALE` avec un identifiant Scryfall sont analysées. Les cartes vendues et les cartes qui ne figurent pas dans l'inventaire ne sont jamais demandées à Scryfall par le moniteur de phase 1.
@@ -79,7 +78,7 @@ Les tests utilisent une base SQLite temporaire et neutralisent `DATABASE_URL` : 
 
 ## Prochaines étapes
 
-Les commandes slash Discord et l'assistant IA (`agents/`, `ai_engine.py`) ne sont pas branchés sur l'interface. Le découpage de `database/storage.py` est fait en grande partie ; il reste les alertes et la migration JSON à isoler si le fichier grossit.
+Le code d'assistant IA (OpenAI), les commandes slash Discord et le moteur de prédictions non branché ont été retirés ; le suivi des prix et les alertes reposent uniquement sur des règles. Le découpage de `database/storage.py` est fait en grande partie ; il reste les alertes et la migration JSON à isoler si le fichier grossit.
 ## Outils de l'application
 
 - services/github_actions.py : boutons de lancement des workflows (secret Streamlit GITHUB_DISPATCH_TOKEN).

@@ -211,7 +211,7 @@ def _alert_embed(alert):
         "value": stock_advisor.popularity_badge(alert.get("popularity_delta_pct")), "inline": True,
     })
     if alert.get("context"):
-        fields.append({"name": "Contexte IA", "value": alert["context"], "inline": False})
+        fields.append({"name": "Contexte", "value": alert["context"], "inline": False})
     if alert.get("verdict"):
         fields.append({"name": "Verdict", "value": alert["verdict"], "inline": False})
     trend = alert.get("trend")

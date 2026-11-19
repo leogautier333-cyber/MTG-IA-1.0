@@ -1,1 +1,0 @@
-"""Tool-backed assistant components."""

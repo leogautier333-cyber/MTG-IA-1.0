@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_PATHS = ("database", "services", "agents", "ai_engine.py", "discord_bot.py", "scryfall.py")
+CORE_PATHS = ("database", "services", "scryfall.py")
 PRIVATE_OWNERS = {"storage", "market_data", "stock_advisor", "inventory", "snapshot", "backup"}
 
 
@@ -29,8 +29,8 @@ class ArchitectureTests(unittest.TestCase):
 
     def test_modules_outside_the_database_package_use_public_interfaces_only(self):
         offenders = []
-        for path in _sources(("services", "agents", "modules", "ai_engine.py", "discord_bot.py",
-                              "app.py", "data_manager.py", "performance_view.py")):
+        for path in _sources(("services", "modules",
+                              "app.py", "data_manager.py")):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if (isinstance(node, ast.Attribute) and node.attr.startswith("_")
                         and not node.attr.startswith("__")

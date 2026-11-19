@@ -14,8 +14,6 @@ from services.market_signals import (
 )
 from services.portfolio_analytics import analyze_portfolio, simulate_sale, suggest_arbitrage
 from services.source_health import get_source_statuses
-from agents.tool_agent import ToolCallingAgent
-from agents.tools import query_collection, tool_simulate_sale
 
 
 class WorkflowTests(unittest.TestCase):
@@ -101,16 +99,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["unrealized_profit"], 0.3)
         self.assertEqual(result["by_set"]["tst"]["profit"], 0.3)
         self.assertEqual(result["top_positions"][0]["weight_pct"], 100)
-
-    def test_agent_stock_tools_read_current_inventory(self):
-        card = {"scryfall_id": "agent-card", "name": "Agent Card", "set_code": "tst",
-                "status": "FOR_SALE", "purchase_price": 2, "selling_price": 5}
-        storage.save_collection([card])
-        self.assertEqual(query_collection("agent")["count"], 1)
-        self.assertEqual(tool_simulate_sale("agent-card", 10)["profit_total"], 7.5)
-        storage.save_collection([])
-        self.assertEqual(query_collection("agent")["count"], 0)
-        self.assertEqual(tool_simulate_sale("agent-card", 10)["error"], "Carte absente de la collection.")
 
     def test_reprint_history_and_buyout_proxy_require_evidence(self):
         old_print = {
@@ -211,7 +199,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["card_name"], "Spec Card")
 
-    def test_deck_import_and_tool_number_validation(self):
+    def test_deck_import_counts_owned_and_missing_cards(self):
         deck = parse_plain_decklist("Commander\n1 Sol Ring (CMM) 396\n2x Fire // Ice")
         analysis = analyze_decklist(
             deck, [{"name": "Sol Ring", "quantity": 1, "status": "FOR_SALE"}],
@@ -221,8 +209,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(deck[1], {"name": "Fire // Ice", "quantity": 2})
         self.assertEqual(analysis["owned_count"], 1)
         self.assertEqual(analysis["missing"][0]["quantity"], 2)
-        self.assertTrue(ToolCallingAgent._contains_unverified_number("Le prix est 99 €", ['{"price": 9.9}']))
-        self.assertFalse(ToolCallingAgent._contains_unverified_number("Le prix est 9.9 €", ['{"price": 9.9}']))
 
     def test_source_freshness_distinguishes_stale_from_failed(self):
         storage.record_source_health("scryfall", True, checked_at="2026-10-14T00:00:00+00:00")

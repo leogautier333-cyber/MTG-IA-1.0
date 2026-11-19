@@ -1,4 +1,4 @@
-"""IA à règles : explique une variation de prix d'une carte du stock et donne un verdict d'action.
+"""Règles métier : explique une variation de prix d'une carte du stock et donne un verdict d'action.
 
 Aucun appel externe : le diagnostic croise la variation de prix, la popularité EDHREC et
 les événements de marché déjà détectés (spoilers/réimpressions, bans, rumeurs Reddit).

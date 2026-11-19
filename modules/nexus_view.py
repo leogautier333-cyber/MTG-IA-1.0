@@ -1,7 +1,6 @@
 import streamlit as st
 
 import data_manager
-from modules.local_assistant import answer_local_query
 from services.market_monitor import refresh_watchlist_prices
 from services.source_health import get_source_statuses
 from services.backtesting import backtest_price_threshold, evaluate_alerts
@@ -258,20 +257,3 @@ def render_nexus_tab():
                 hide_index=True,
                 use_container_width=True,
             )
-
-    st.subheader("Assistant local")
-    history = st.session_state.setdefault("nexus_chat_history", [])
-    for message in history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    query = st.chat_input("Interroge ton stock, ton ROI, ta watchlist ou un lot d'échange…", key="nexus_chat_input")
-    if query:
-        response = answer_local_query(query, collection, watchlist)
-        history.extend([
-            {"role": "user", "content": query},
-            {"role": "assistant", "content": response},
-        ])
-        with st.chat_message("user"):
-            st.markdown(query)
-        with st.chat_message("assistant"):
-            st.markdown(response)

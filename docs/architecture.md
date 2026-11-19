@@ -21,6 +21,7 @@ Organisation du code :
 - `modules/prices_view.py` : affichage des prix, alertes et actions GitHub, avec bouton Discord isolé par fragment.
 - `modules/search_view.py` : recherche Scryfall et préparation des imports génériques ou Cardmarket.
 - `modules/stock_view.py` : tableau de bord, filtres, édition et export/restauration du stock.
+- `modules/theme.py` : thème néo-futuriste cyberpunk (feuille de style néon injectée par `apply_theme()` et gabarit Plotly `cyberpunk` appliqué par défaut à tous les graphiques) ; `.streamlit/config.toml` fixe les couleurs de base de Streamlit. Les polices viennent de Google Fonts ; sans accès réseau, le navigateur utilise des polices de repli.
 - Les couches `database/` et `services/` ainsi que `scryfall.py` n'importent ni Streamlit ni `data_manager` ; seuls les écrans (`app.py`, `modules/`) passent par la façade en cache, qui invalide son cache après chaque écriture ou action Nexus. Le moniteur d'alertes n'utilise que des interfaces publiques de `database/` (`storage.transaction()`, `storage.open_connection()`, fonctions `*_with(connection, …)`). `tests/test_architecture.py` vérifie ces deux règles.
 - `scryfall.py` envoie toutes ses requêtes par une fonction commune : trois tentatives au plus sur 429, 5xx, coupure réseau ou délai dépassé (`Retry-After` respecté, attente plafonnée à 10 s). Un 404 n'est jamais relancé et une panne durable lève une erreur au lieu d'être confondue avec une carte introuvable.
 

@@ -6,6 +6,7 @@ from services.source_health import get_source_statuses
 from services.backtesting import backtest_price_threshold, evaluate_alerts
 from services.market_signals import analyze_snapshot_buyout, calculate_reprint_risk
 from services.deck_importer import analyze_decklist, fetch_decklist
+from services import community_feeds
 from services.spoiler_watcher import scan_spoilers
 
 
@@ -19,6 +20,8 @@ def render_nexus_tab():
         label = {
             "scryfall": "Scryfall API",
             "scryfall_bulk": "Scryfall Bulk",
+            "mtggoldfish": "MTGGoldfish (flux public)",
+            "youtube": "YouTube (chaînes configurées)",
         }.get(source, source)
         checked_at = health.get("checked_at")
         details = f"Dernier contrôle : {checked_at}" if checked_at else health["details"]
@@ -78,6 +81,32 @@ def render_nexus_tab():
             st.warning(alert["message"])
             if alert["source_url"]:
                 st.markdown(f"[Ouvrir la source]({alert['source_url']})")
+
+    st.subheader("Veille communautaire (MTGGoldfish / YouTube)")
+    if st.button("Analyser les flux publics", key="nexus_scan_community"):
+        try:
+            tracked_cards = [card for card in [*watchlist, *collection] if card.get("scryfall_id")]
+            st.session_state["nexus_community_result"] = community_feeds.scan_community(tracked_cards)
+            data_manager.clear_cache()
+        except Exception as error:
+            st.session_state["nexus_community_error"] = str(error)
+    community_error = st.session_state.pop("nexus_community_error", None)
+    if community_error:
+        st.error(f"Échec de la veille communautaire : {community_error}")
+    community_result = st.session_state.get("nexus_community_result")
+    if community_result:
+        if community_result["errors"]:
+            st.warning("Flux indisponibles : " + "; ".join(community_result["errors"]))
+        if community_result["mentions"]:
+            st.dataframe(
+                [{"Carte": item["card_name"], "Source": item["source_label"], "Titre": item["title"],
+                  "Date": (item["published"] or "")[:10], "Lien": item["url"]}
+                 for item in community_result["mentions"]],
+                hide_index=True, use_container_width=True,
+                column_config={"Lien": st.column_config.LinkColumn("Lien")},
+            )
+        elif not community_result["errors"]:
+            st.info("Aucune mention récente des cartes suivies.")
 
     st.subheader("Sentinelle anti-buyout")
     tracked_variants = {}

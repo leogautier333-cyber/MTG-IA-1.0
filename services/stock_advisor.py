@@ -56,8 +56,24 @@ def _event_kinds(events):
     return {event.get("category") or event.get("event_type") for event in events}
 
 
-def advise(change_pct, popularity_delta=None, events=()):
-    """Retourne {kind, context, verdict} pour une variation de prix du stock."""
+def _mention_note(mentions):
+    if not mentions:
+        return ""
+    cited = "; ".join(
+        f"{item.get('source_label', 'Source')} « {str(item.get('title', ''))[:80]} »" for item in list(mentions)[:2]
+    )
+    return f" Mention récente (indice non vérifié, pas une cause établie) : {cited}."
+
+
+def advise(change_pct, popularity_delta=None, events=(), mentions=()):
+    """Retourne {kind, context, verdict}. Les mentions MTGGoldfish/YouTube ne servent que de contexte."""
+    advice = _advise(change_pct, popularity_delta, events)
+    note = _mention_note(mentions)
+    return {**advice, "context": advice["context"] + note} if note else advice
+
+
+def _advise(change_pct, popularity_delta, events):
+    """Règles de lecture d'une variation de prix du stock."""
     events = list(events)
     kinds = _event_kinds(events)
     rising = change_pct > 0

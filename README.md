@@ -41,6 +41,8 @@ pour l'affichage sont mis en cache jusqu'à 60 secondes.
 - `healthcheck.yml` : contrôle manuel de la base (applique les migrations en attente, affiche la version du schéma et signale sans les modifier les données anciennes invalides). Même contrôle en local : `python -m database.healthcheck`.
 - `tests.yml` : tests SQLite puis PostgreSQL jetable à chaque push.
 
+La veille communautaire lit le flux public de MTGGoldfish et, si tu définis `MTG_YOUTUBE_CHANNEL_IDS` (identifiants de chaînes `UC…` séparés par des virgules ; variable d'environnement locale, secret Streamlit, et variable de dépôt GitHub pour `stock_analysis.yml`), les flux des chaînes YouTube choisies. Ces mentions ne sont qu'un indice affiché avec les alertes ; elles ne déclenchent aucune alerte.
+
 Les dépendances des workflows sont dans `requirements-actions.txt`, avec les versions testées de `constraints.txt` ; un test vérifie que chaque workflow installe ce que sa commande importe.
 
 Les trois premiers peuvent être lancés à la main depuis l'onglet « Prix & Alertes » de l'application.

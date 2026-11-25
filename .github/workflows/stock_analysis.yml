@@ -30,6 +30,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MTG_YOUTUBE_CHANNEL_IDS: ${{ vars.MTG_YOUTUBE_CHANNEL_IDS }}
 
       - name: Notify failure on Discord
         if: failure()

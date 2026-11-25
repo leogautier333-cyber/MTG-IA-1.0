@@ -7,14 +7,24 @@ from database import storage
 DEFAULT_MAX_AGE_HOURS = {
     "scryfall": max(1, int(os.getenv("NEXUS_SCRYFALL_MAX_AGE_HOURS", "36"))),
     "scryfall_bulk": max(1, int(os.getenv("NEXUS_SCRYFALL_BULK_MAX_AGE_HOURS", "36"))),
+    "mtggoldfish": max(1, int(os.getenv("NEXUS_MTGGOLDFISH_MAX_AGE_HOURS", "72"))),
 }
+YOUTUBE_MAX_AGE_HOURS = max(1, int(os.getenv("NEXUS_YOUTUBE_MAX_AGE_HOURS", "72")))
+
+
+def monitored_sources():
+    """Sources suivies ; YouTube seulement si des chaînes sont configurées (sinon état toujours inconnu)."""
+    sources = dict(DEFAULT_MAX_AGE_HOURS)
+    if os.getenv("MTG_YOUTUBE_CHANNEL_IDS", "").strip():
+        sources["youtube"] = YOUTUBE_MAX_AGE_HOURS
+    return sources
 
 
 def get_source_statuses(now=None):
     now = now or datetime.now(timezone.utc)
     recorded = storage.get_source_health()
     statuses = {}
-    for source, max_age in DEFAULT_MAX_AGE_HOURS.items():
+    for source, max_age in monitored_sources().items():
         check = recorded.get(source)
         if not check:
             statuses[source] = {"status": "UNKNOWN", "details": "Aucun contrôle enregistré."}

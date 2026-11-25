@@ -14,7 +14,7 @@ import requests
 import scryfall
 
 from database import market_data, storage
-from services import inventory, spoiler_watcher, stock_advisor
+from services import community_feeds, inventory, spoiler_watcher, stock_advisor
 from services.money import decimal_amount
 
 
@@ -525,12 +525,28 @@ def scan_stock_events(session=requests):
     return detected
 
 
-def analyze_stock_prices(session=requests, events=()):
+def scan_community_mentions(session=requests):
+    """Mentions des cartes du stock dans les flux publics ; n'échoue jamais (contexte facultatif)."""
+    positions = _stock_positions(inventory.get_collection())
+    if not positions:
+        return []
+    stock_cards = [{"name": p["name"], "scryfall_id": p["scryfall_id"]} for p in positions.values()]
+    try:
+        result = community_feeds.scan_community(stock_cards, session=session)
+    except Exception:
+        LOGGER.exception("Échec de la veille communautaire ; analyse des prix poursuivie.")
+        return []
+    for error in result["errors"]:
+        LOGGER.warning("Veille communautaire partielle : %s", error)
+    return result["mentions"]
+
+
+def analyze_stock_prices(session=requests, events=(), mentions=()):
     with _analysis_lock():
-        return _analyze_stock_prices(session=session, events=events)
+        return _analyze_stock_prices(session=session, events=events, mentions=mentions)
 
 
-def _analyze_stock_prices(session=requests, events=()):
+def _analyze_stock_prices(session=requests, events=(), mentions=()):
     started = time.perf_counter()
     collection = inventory.get_collection()
     untracked = [
@@ -554,6 +570,9 @@ def _analyze_stock_prices(session=requests, events=()):
     events_by_card = {}
     for event in events:
         events_by_card.setdefault(event.get("scryfall_id"), []).append(event)
+    mentions_by_card = {}
+    for mention in mentions:
+        mentions_by_card.setdefault(mention.get("scryfall_id"), []).append(mention)
     card_ids = list(dict.fromkeys(position["scryfall_id"] for position in positions.values()))
     cards_by_id = {
         card.get("id"): card
@@ -637,7 +656,8 @@ def _analyze_stock_prices(session=requests, events=()):
                 }
             else:
                 advice = stock_advisor.advise(
-                    change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ())
+                    change_pct, popularity_delta, events_by_card.get(position["scryfall_id"], ()),
+                    mentions_by_card.get(position["scryfall_id"], ()),
                 )
             alert = _create_price_alert(
                 position, previous, current_price, observed_at, advice, popularity_delta
@@ -686,9 +706,11 @@ def run_analysis(session=requests):
         except Exception:
             LOGGER.exception("Échec de la veille des réimpressions ; analyse des prix poursuivie.")
             events = []
-        LOGGER.info("Veille événements : %.2fs.", time.perf_counter() - started)
-        result = _analyze_stock_prices(session=session, events=events)
+        mentions = scan_community_mentions(session=session)
+        LOGGER.info("Veille événements et communautaire : %.2fs.", time.perf_counter() - started)
+        result = _analyze_stock_prices(session=session, events=events, mentions=mentions)
         result["events_detected"] = len(events)
+        result["community_mentions"] = len(mentions)
         return result
 
 

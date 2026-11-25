@@ -10,10 +10,27 @@ from services import inventory, phase_one_monitor, stock_advisor
 
 
 class AdvisorRulesTests(unittest.TestCase):
-    def test_healthy_rise_when_popularity_grows(self):
+    def test_organic_rise_when_price_and_popularity_both_improve(self):
         advice = stock_advisor.advise(12.0, popularity_delta=15.0)
-        self.assertEqual(advice["kind"], "HEALTHY_RISE")
+        self.assertEqual(advice["kind"], "ORGANIC_RISE")
         self.assertIn("incertaines", advice["verdict"])
+
+    def test_isolated_spike_is_distinguished_from_unmeasured_rise(self):
+        for popularity in (0.0, 4.9, -20.0):
+            self.assertEqual(stock_advisor.advise(15.0, popularity)["kind"], "ISOLATED_SPIKE", popularity)
+        self.assertEqual(stock_advisor.advise(15.0, None)["kind"], "UNEXPLAINED_RISE")
+        self.assertEqual(stock_advisor.advise(10.0, 5.0)["kind"], "ORGANIC_RISE")
+        self.assertIn("Pic isolé", stock_advisor.advise(15.0, 0.0)["verdict"])
+
+    def test_legality_change_gives_a_specific_verdict(self):
+        banned = stock_advisor.advise_event({"category": "LEGALITY_CHANGE",
+                                             "transitions": {"commander": {"from": "legal", "to": "banned"}}})
+        unbanned = stock_advisor.advise_event({"category": "LEGALITY_CHANGE",
+                                               "transitions": {"commander": {"from": "banned", "to": "legal"}}})
+        self.assertIn("Ban", banned["verdict"])
+        self.assertIn("Retour", unbanned["verdict"])
+        self.assertEqual(
+            stock_advisor.advise(-12.0, None, [{"category": "LEGALITY_CHANGE"}])["kind"], "LEGALITY_NEWS")
 
     def test_speculative_bubble_when_price_jumps_without_popularity(self):
         for popularity in (None, 0.0, -5.0):
@@ -24,7 +41,7 @@ class AdvisorRulesTests(unittest.TestCase):
     def test_reprint_event_overrides_price_reading(self):
         advice = stock_advisor.advise(-12.0, None, [{"category": "SPOILER_REPRINT"}])
         self.assertEqual(advice["kind"], "REPRINT_DROP")
-        rising = stock_advisor.advise(12.0, 20.0, [{"event_type": "REPRINT_RUMOR"}])
+        rising = stock_advisor.advise(12.0, 20.0, [{"event_type": "SPOILER_REPRINT"}])
         self.assertEqual(rising["kind"], "REPRINT_RISK")
 
     def test_drop_with_growing_popularity_is_temporary(self):
@@ -82,6 +99,7 @@ class AdvisorIntegrationTests(unittest.TestCase):
 
     def test_event_scan_is_limited_to_stock_and_deduplicated(self):
         inventory.save_collection([self.card, {**self.card, "scryfall_id": "sold", "status": "SOLD"}])
+        inventory.record_price_snapshot("stock-card", 10.0, observed_at="2026-10-22T10:00:00+00:00")
         spoiler_alert = {
             "id": "spoiler:x:stock-card", "category": "SPOILER_REPRINT", "card_name": "Stock Card",
             "scryfall_id": "stock-card", "message": "Réimpression détectée.",

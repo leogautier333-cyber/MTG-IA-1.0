@@ -10,8 +10,9 @@ from database import market_data
 POPULARITY_WINDOW_DAYS = 30
 POPULARITY_RISE_PCT = 5.0
 SPECULATIVE_RISE_PCT = 30.0
-REPRINT_EVENTS = {"SPOILER_REPRINT", "REPRINT_RUMOR"}
-BAN_EVENTS = {"BAN_RUMOR"}
+REPRINT_EVENTS = {"SPOILER_REPRINT"}
+LEGALITY_EVENTS = {"LEGALITY_CHANGE"}
+BANNED_STATUSES = {"banned", "restricted"}
 
 
 def popularity_delta_pct(scryfall_id, today=None):
@@ -79,10 +80,10 @@ def advise(change_pct, popularity_delta=None, events=()):
             "context": "Baisse observée en présence d'un signal de réimpression, sans causalité établie.",
             "verdict": "Vérifier la source et évaluer le risque avant toute décision.",
         }
-    if kinds & BAN_EVENTS:
+    if kinds & LEGALITY_EVENTS:
         return {
-            "kind": "BAN_NEWS",
-            "context": "Un ban/unban ou une rumeur de banlist concerne cette carte.",
+            "kind": "LEGALITY_NEWS",
+            "context": "Un changement de légalité (ban, restriction ou retour) concerne cette carte.",
             "verdict": "Vérifier l'annonce officielle avant toute décision.",
         }
     if rising and change_pct >= SPECULATIVE_RISE_PCT and popular_flat_or_down:
@@ -94,14 +95,22 @@ def advise(change_pct, popularity_delta=None, events=()):
         }
     if rising and popular_up:
         return {
-            "kind": "HEALTHY_RISE",
-            "context": f"Hausse observée avec une popularité EDHREC en progression ({popularity_text}).",
-            "verdict": "Surveiller : la relation causale et l'évolution future restent incertaines.",
+            "kind": "ORGANIC_RISE",
+            "context": f"Hausse de {change_pct:+.0f} % soutenue par la demande : "
+                       f"rang EDHREC en amélioration ({popularity_text}).",
+            "verdict": "Hausse organique probable : surveiller, les causes et l'évolution future restent incertaines.",
+        }
+    if rising and popularity_delta is not None:
+        return {
+            "kind": "ISOLATED_SPIKE",
+            "context": f"Pic de prix ({change_pct:+.0f} %) sans amélioration du rang EDHREC ({popularity_text}) : "
+                       "rien ne le soutient dans la demande mesurée.",
+            "verdict": "Pic isolé : ne pas extrapoler ; envisager de vendre une partie si le prix tient.",
         }
     if rising:
         return {
             "kind": "UNEXPLAINED_RISE",
-            "context": f"Hausse sans signal de demande clair ({popularity_text}).",
+            "context": f"Hausse sans signal de demande mesurable ({popularity_text}).",
             "verdict": "Surveiller ; envisager une vente partielle si la hausse se poursuit.",
         }
     if popular_up:
@@ -122,8 +131,11 @@ def advise_event(alert):
     category = alert.get("category") or alert.get("event_type")
     if category in REPRINT_EVENTS:
         return {"verdict": "Vérifier la réimpression et évaluer le risque avant d'envisager de vendre."}
-    if category in BAN_EVENTS:
-        return {"verdict": "Vérifier l'annonce officielle ; un ban peut faire varier le prix dans les deux sens."}
-    if category == "SPECULATIVE_PUMP":
-        return {"verdict": "Prudence : ne pas acheter ; vendre si le prix monte sans demande réelle."}
-    return {"verdict": "Signal communautaire à surveiller, pas une prévision de prix."}
+    if category in LEGALITY_EVENTS:
+        targets = [change.get("to") for change in (alert.get("transitions") or {}).values()]
+        if any(status in BANNED_STATUSES for status in targets):
+            return {"verdict": "Ban ou restriction : vérifier l'annonce officielle ; le prix peut réagir dans les deux sens."}
+        if any(status == "legal" for status in targets):
+            return {"verdict": "Retour en légalité : la demande peut remonter, vérifier l'annonce officielle."}
+        return {"verdict": "Changement de légalité : vérifier le format concerné avant toute décision."}
+    return {"verdict": "Événement à surveiller, pas une prévision de prix."}

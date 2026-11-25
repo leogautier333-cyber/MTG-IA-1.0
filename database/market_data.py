@@ -158,6 +158,41 @@ def sync_bulk_prints(cards, synced_at=None):
     return summary
 
 
+LEGALITY_KEY_PREFIX = "legalities:"
+
+
+def get_legality_snapshots_with(connection, scryfall_ids):
+    """Dernières légalités connues par impression ({scryfall_id: {format: statut}}), sans migration."""
+    ids = list(dict.fromkeys(str(card_id) for card_id in scryfall_ids))
+    snapshots = {}
+    for start in range(0, len(ids), 500):
+        keys = [LEGALITY_KEY_PREFIX + card_id for card_id in ids[start:start + 500]]
+        placeholders = ", ".join("?" for _ in keys)
+        for row in connection.execute(
+            f"SELECT key, value FROM metadata WHERE key IN ({placeholders})", keys
+        ).fetchall():
+            try:
+                value = json.loads(row["value"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict):
+                snapshots[row["key"][len(LEGALITY_KEY_PREFIX):]] = value
+    return snapshots
+
+
+def record_legality_snapshots_with(connection, snapshots):
+    rows = [
+        (LEGALITY_KEY_PREFIX + str(card_id), _serialize(legalities))
+        for card_id, legalities in snapshots.items() if isinstance(legalities, dict) and legalities
+    ]
+    if rows:
+        connection.executemany(
+            """INSERT INTO metadata(key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            rows,
+        )
+
+
 def record_demand_snapshot(scryfall_id, edhrec_rank, snapshot_day=None):
     """Enregistre le rang EDHREC du jour pour une carte (sans dépendre du bulk Scryfall)."""
     rank = _as_optional_int(edhrec_rank)

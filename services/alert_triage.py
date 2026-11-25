@@ -20,6 +20,8 @@ def _event_reliability(kind, source_url):
     kind = str(kind or "").upper()
     if "RUMOR" in kind or "HYPE" in kind:
         return "Faible · rumeur communautaire"
+    if kind == "LEGALITY_CHANGE":
+        return "Officielle · légalité Scryfall"
     if "SPOILER" in kind or "REPRINT" in kind or "BAN" in kind:
         return "À confirmer · veille événementielle"
     if kind == PRICE_EVENT:

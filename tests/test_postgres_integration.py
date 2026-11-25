@@ -170,6 +170,19 @@ class PostgresIntegrationTests(unittest.TestCase):
         self.assertEqual({name: len(ids) for name, ids in report.items()},
                          {"inventory": 1, "price_snapshots": 1})
 
+    def test_legality_snapshots_round_trip_in_metadata(self):
+        from database import market_data
+
+        with self.storage.transaction() as connection:
+            market_data.record_legality_snapshots_with(connection, {"a": {"commander": "legal"}, "b": {}})
+        with self.storage.transaction() as connection:
+            market_data.record_legality_snapshots_with(connection, {"a": {"commander": "banned"}})
+        with self.storage.transaction() as connection:
+            self.assertEqual(
+                market_data.get_legality_snapshots_with(connection, ["a", "b", "c"]),
+                {"a": {"commander": "banned"}},
+            )
+
     def test_sql_validation_trigger_rejects_direct_invalid_updates(self):
         from psycopg.errors import RaiseException
 

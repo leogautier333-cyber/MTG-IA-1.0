@@ -125,6 +125,36 @@ def _stock_positions(collection):
     return positions
 
 
+LEGALITY_LABELS = {"legal": "légal", "not_legal": "non légal", "banned": "banni", "restricted": "restreint"}
+
+
+def legality_transitions(previous, current):
+    """Formats dont le statut a changé entre deux relevés ; un format nouveau n'est pas un changement."""
+    return {
+        name: {"from": previous[name], "to": status}
+        for name, status in (current or {}).items()
+        if name in previous and previous[name] != status
+    }
+
+
+def _create_legality_alert(position, transitions, scryfall_uri, observed_at):
+    detail = ", ".join(
+        f"{name} : {LEGALITY_LABELS.get(change['from'], change['from'])} → "
+        f"{LEGALITY_LABELS.get(change['to'], change['to'])}"
+        for name, change in sorted(transitions.items())
+    )
+    identity = "|".join(("legality", position["scryfall_id"], observed_at[:10], detail))
+    alert = {
+        "id": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        "kind": "LEGALITY_CHANGE", "status": "pending", "created_at": observed_at,
+        "scryfall_id": position["scryfall_id"], "foil": False,
+        "card_name": position["name"], "set_code": position.get("set_code", ""),
+        "transitions": transitions, "source_url": scryfall_uri or "",
+        "message": f"[LÉGALITÉ] {position['name']} : {detail} (source : Scryfall).",
+    }
+    return {**alert, **stock_advisor.advise_event({**alert, "category": "LEGALITY_CHANGE"})}
+
+
 def _create_target_alert(position, current_price, observed_at):
     target = position["target_price"]
     identity = f"target|{position['scryfall_id']}|{position['foil']}|{target:.2f}"
@@ -239,6 +269,8 @@ def _summary_group(alert):
         if trend not in {"UP", "DOWN", "STABLE"}:
             trend = "UP" if float(alert.get("change_pct", 0)) > 0 else "DOWN"
         return {"UP": "📈 Hausses", "DOWN": "📉 Baisses", "STABLE": "➡️ Stagnations"}[trend]
+    if kind == "LEGALITY_CHANGE":
+        return "⚖️ Légalité"
     return "🎯 Objectifs atteints" if kind == "TARGET_REACHED" else "📰 Veille du stock"
 
 
@@ -269,7 +301,8 @@ def _summary_payload(alerts, delivery_id=None, recovered=0, previous_ids=()):
     groups = {}
     for alert in alerts:
         groups.setdefault(_summary_group(alert), []).append(_summary_line(alert))
-    order = ("📈 Hausses", "📉 Baisses", "➡️ Stagnations", "🎯 Objectifs atteints", "📰 Veille du stock")
+    order = ("📈 Hausses", "📉 Baisses", "➡️ Stagnations", "🎯 Objectifs atteints",
+             "⚖️ Légalité", "📰 Veille du stock")
     sections = [f"{group} ({len(groups[group])})\n" + "\n".join(groups[group])
                 for group in order if group in groups]
     banner = ""
@@ -427,6 +460,16 @@ def _notify_source_problem(errors, session=requests):
     storage.set_metadata("source_alert_date", today)
 
 
+def _latest_unit_prices(card_ids):
+    """Dernier prix de marché connu par carte (le plus élevé des finitions), en Decimal."""
+    with storage.transaction() as connection:
+        snapshots = storage.get_latest_stock_snapshots_with(connection, list(card_ids))
+    best = {}
+    for (card_id, _foil), snapshot in snapshots.items():
+        best[card_id] = max(best.get(card_id, Decimal("0")), decimal_amount(snapshot["price_eur"]))
+    return best
+
+
 def scan_stock_events(session=requests):
     """Veille des réimpressions annoncées par Scryfall, limitée aux cartes du stock.
 
@@ -449,10 +492,11 @@ def scan_stock_events(session=requests):
         _notify_source_problem(result["errors"], session=session)
 
     detected = []
+    unit_prices = _latest_unit_prices(id_by_name.values()) if result.get("alerts") else {}
     for item in result.get("alerts", []):
         category = item.get("category") or item.get("event_type")
         scryfall_id = item.get("scryfall_id") or id_by_name.get(str(item.get("card_name", "")).casefold())
-        if not scryfall_id:
+        if not scryfall_id or unit_prices.get(scryfall_id, Decimal("0")) < MIN_ALERT_UNIT_PRICE:
             continue
         detected.append({**item, "category": category, "scryfall_id": scryfall_id})
 
@@ -541,6 +585,34 @@ def _analyze_stock_prices(session=requests, events=()):
         previous_prices = storage.get_latest_stock_snapshots_with(connection, card_ids)
         market_data.record_demand_snapshots_with(connection, ranks, observed_at[:10])
         demand_histories = market_data.get_edhrec_histories_with(connection, card_ids)
+
+        # Veille de légalité : le champ `legalities` est déjà dans les cartes récupérées (aucune requête en plus).
+        # Premier relevé = référence silencieuse ; seul un changement sur une carte >= 1,00 € alerte.
+        previous_legalities = market_data.get_legality_snapshots_with(connection, card_ids)
+        current_legalities = {}
+        for position, current_price in valid_positions:
+            card_id = position["scryfall_id"]
+            legalities = cards_by_id[card_id].get("legalities")
+            if card_id in current_legalities or not isinstance(legalities, dict) or not legalities:
+                continue
+            current_legalities[card_id] = legalities
+            transitions = legality_transitions(previous_legalities.get(card_id, legalities), legalities)
+            if not transitions:
+                continue
+            known_prices = [
+                snapshot["price_eur"] for (known_id, _foil), snapshot in previous_prices.items()
+                if known_id == card_id
+            ]
+            if not meets_alert_floor(max(known_prices, default=0), current_price):
+                continue
+            events_by_card.setdefault(card_id, []).append({"category": "LEGALITY_CHANGE"})
+            legality_alert = _create_legality_alert(
+                position, transitions, cards_by_id[card_id].get("scryfall_uri"), observed_at
+            )
+            if legality_alert["id"] not in known_alert_ids:
+                new_alerts.append(legality_alert)
+                known_alert_ids.add(legality_alert["id"])
+        market_data.record_legality_snapshots_with(connection, current_legalities)
         for position, current_price in valid_positions:
             previous = previous_prices.get((position["scryfall_id"], position["foil"]))
             if position.get("target_price") and current_price >= position["target_price"]:

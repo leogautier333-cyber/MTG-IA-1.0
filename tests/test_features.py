@@ -169,8 +169,8 @@ class TargetAndSourceAlertTests(unittest.TestCase):
 
     def test_source_problem_alert_is_sent_once_per_day(self):
         with patch.object(phase_one_monitor.requests, "post", return_value=Mock()) as post:
-            phase_one_monitor._notify_source_problem(["Reddit r/mtgfinance: timeout"])
-            phase_one_monitor._notify_source_problem(["Reddit r/mtgfinance: timeout"])
+            phase_one_monitor._notify_source_problem(["Scryfall (spoilers): timeout"])
+            phase_one_monitor._notify_source_problem(["Scryfall (spoilers): timeout"])
         self.assertEqual(post.call_count, 1)
         self.assertIn("SOURCE INDISPONIBLE", post.call_args.kwargs["json"]["embeds"][0]["title"])
 

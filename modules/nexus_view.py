@@ -6,19 +6,19 @@ from services.source_health import get_source_statuses
 from services.backtesting import backtest_price_threshold, evaluate_alerts
 from services.market_signals import analyze_snapshot_buyout, calculate_reprint_risk
 from services.deck_importer import analyze_decklist, fetch_decklist
-from services.spoiler_watcher import scan_spoilers_and_trends
+from services.spoiler_watcher import scan_spoilers
 
 
 def render_nexus_tab():
     st.header("Nexus")
 
     st.subheader("Santé des sources")
-    health_columns = st.columns(3)
-    for column, (source, health) in zip(health_columns, get_source_statuses().items()):
+    statuses = get_source_statuses()
+    health_columns = st.columns(len(statuses))
+    for column, (source, health) in zip(health_columns, statuses.items()):
         label = {
             "scryfall": "Scryfall API",
             "scryfall_bulk": "Scryfall Bulk",
-            "reddit": "Reddit r/mtgfinance",
         }.get(source, source)
         checked_at = health.get("checked_at")
         details = f"Dernier contrôle : {checked_at}" if checked_at else health["details"]
@@ -57,10 +57,10 @@ def render_nexus_tab():
                 f"({alert['previous_price']:.2f} € → {alert['current_price']:.2f} €; {alert['currency_source']})."
             )
 
-    st.subheader("Veille spoilers & tendances Reddit")
-    if st.button("Analyser Scryfall et r/mtgfinance", key="nexus_scan_spoilers"):
+    st.subheader("Veille des réimpressions (Scryfall)")
+    if st.button("Analyser les aperçus Scryfall", key="nexus_scan_spoilers"):
         try:
-            st.session_state["nexus_spoiler_result"] = scan_spoilers_and_trends(watchlist, collection)
+            st.session_state["nexus_spoiler_result"] = scan_spoilers(watchlist, collection)
             data_manager.clear_cache()
         except Exception as error:
             st.session_state["nexus_spoiler_error"] = str(error)
@@ -71,23 +71,13 @@ def render_nexus_tab():
     if spoiler_result:
         if spoiler_result["errors"]:
             st.warning("Sources temporairement indisponibles : " + "; ".join(spoiler_result["errors"]))
-        st.caption(
-            f"{spoiler_result['spoiler_count']} carte(s) preview Scryfall · "
-            f"{spoiler_result['reddit_posts_scanned']} posts Reddit analysés · "
-            f"température observée : {spoiler_result['community_temperature']} "
-            f"({spoiler_result['reddit_hype_posts']} post(s) avec signaux spéculatifs)."
-        )
+        st.caption(f"{spoiler_result['spoiler_count']} carte(s) en aperçu sur Scryfall.")
         if not spoiler_result["alerts"]:
-            st.info("Aucun spoiler ou signal Reddit correspondant au stock et à la watchlist.")
+            st.info("Aucune réimpression annoncée correspondant au stock et à la watchlist.")
         for alert in spoiler_result["alerts"]:
             st.warning(alert["message"])
             if alert["source_url"]:
                 st.markdown(f"[Ouvrir la source]({alert['source_url']})")
-        for event in spoiler_result.get("events", []):
-            st.caption(
-                f"{event['event_type']} · {event['card_name']} · "
-                f"confiance {event['confidence'] * 100:.0f} % · {event['source']}"
-            )
 
     st.subheader("Sentinelle anti-buyout")
     tracked_variants = {}

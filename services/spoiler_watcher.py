@@ -1,59 +1,15 @@
 from datetime import date, datetime, timedelta
-from html.parser import HTMLParser
 import re
 import time
-import xml.etree.ElementTree as ET
 
 import requests
 
 from database import storage
-from services.market_signals import extract_market_events
 
 
 SCRYFALL_API = "https://api.scryfall.com"
-REDDIT_FEED = "https://www.reddit.com/r/mtgfinance.rss"
 HEADERS = {"User-Agent": "MagicTradingProfitManager/2.0", "Accept": "application/json"}
-REDDIT_HEADERS = {"User-Agent": "MagicTradingProfitManager/2.0 (public RSS monitor)"}
 REPRINT_SET_TYPES = {"expansion", "commander", "masters", "draft_innovation", "core", "promo"}
-HYPE_TERMS = (
-    "spike", "spiking", "surge", "surging", "hype", "buyout", "buy out",
-    "price jump", "price spike", "supply drying", "sell out", "demand is",
-)
-
-
-class _TextExtractor(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.parts = []
-
-    def handle_data(self, data):
-        self.parts.append(data)
-
-
-def _plain_text(value):
-    parser = _TextExtractor()
-    parser.feed(value or "")
-    return " ".join(" ".join(parser.parts).split())
-
-
-def _element_text(element, names):
-    for child in element.iter():
-        if child is element:
-            continue
-        tag = child.tag.rsplit("}", 1)[-1].lower()
-        if tag in names and child.text:
-            return child.text.strip()
-    return ""
-
-
-def _element_link(element):
-    for child in element.iter():
-        if child.tag.rsplit("}", 1)[-1].lower() == "link":
-            if child.attrib.get("href"):
-                return child.attrib["href"]
-            if child.text:
-                return child.text.strip()
-    return ""
 
 
 def _get_json(session, url, params=None):
@@ -135,26 +91,6 @@ def fetch_scryfall_spoilers(session=requests, max_sets=6, max_pages_per_set=4, t
     return spoilers
 
 
-def fetch_reddit_posts(session=requests, limit=50):
-    response = session.get(REDDIT_FEED, headers=REDDIT_HEADERS, timeout=15)
-    response.raise_for_status()
-    root = ET.fromstring(response.content)
-    posts = []
-    for entry in root.iter():
-        if entry.tag.rsplit("}", 1)[-1].lower() not in {"entry", "item"}:
-            continue
-        title = _element_text(entry, {"title"})
-        content = _element_text(entry, {"content", "summary", "description"})
-        posts.append({
-            "title": _plain_text(title),
-            "text": _plain_text(content),
-            "url": _element_link(entry),
-        })
-        if len(posts) >= limit:
-            break
-    return posts
-
-
 def _name_aliases(name):
     return [part.strip().casefold() for part in str(name or "").split(" // ") if part.strip()]
 
@@ -167,7 +103,7 @@ def _contains_name(text, name):
     )
 
 
-def analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, oracle_by_id=None):
+def analyze_spoilers(spoilers, watchlist, collection, oracle_by_id=None):
     oracle_by_id = oracle_by_id or {}
     tracked = []
     for source, cards in (("Watchlist", watchlist), ("Collection", collection)):
@@ -211,58 +147,13 @@ def analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, o
                 ),
             })
 
-    mention_counts = {}
-    post_matches = {}
-    hype_post_count = 0
-    for post in reddit_posts:
-        text = f"{post.get('title', '')} {post.get('text', '')}".casefold()
-        if not any(term in text for term in HYPE_TERMS):
-            continue
-        matched_this_post = set()
-        for card in tracked:
-            if _contains_name(text, card["name"]):
-                key = card.get("scryfall_id") or f"{card['source']}:{card['name']}"
-                matched_this_post.add((key, card["name"], card["source"]))
-                post_matches.setdefault(key, []).append(post)
-        if matched_this_post:
-            hype_post_count += 1
-            for key, name, source in matched_this_post:
-                mention_counts[(key, name, source)] = mention_counts.get((key, name, source), 0) + 1
-
-    for (key, name, source), count in mention_counts.items():
-        posts = post_matches[key]
-        scope = "ta Watchlist" if source == "Watchlist" else "ta collection"
-        first_post = posts[0]
-        alerts.append({
-            "id": f"reddit:{first_post.get('url') or key}:{key}",
-            "category": "REDDIT_HYPE",
-            "card_name": name,
-            "scryfall_id": key if not key.startswith(("Collection:", "Watchlist:")) else None,
-            "scope": scope,
-            "title": first_post.get("title", "Discussion r/mtgfinance"),
-            "count": count,
-            "source_url": first_post.get("url", ""),
-            "message": (
-                f"[OPPORTUNITÉ / HYPE À SURVEILLER] Discussion spéculative autour de {name} "
-                f"({count} mention(s) pertinente(s) parmi les derniers posts r/mtgfinance); "
-                f"carte présente dans {scope}. Signal communautaire, pas une prévision de prix."
-            ),
-        })
-
-    temperature = "Élevée" if hype_post_count >= 5 else "Modérée" if hype_post_count else "Calme"
-    return {
-        "alerts": alerts,
-        "spoiler_count": len(spoilers),
-        "reddit_posts_scanned": len(reddit_posts),
-        "reddit_hype_posts": hype_post_count,
-        "community_temperature": temperature,
-    }
+    return {"alerts": alerts, "spoiler_count": len(spoilers)}
 
 
-def scan_spoilers_and_trends(watchlist, collection, session=requests, max_sets=6, reddit_limit=50):
+def scan_spoilers(watchlist, collection, session=requests, max_sets=6):
+    """Veille des réimpressions annoncées par Scryfall (aperçus des extensions à venir)."""
     errors = []
     spoilers = []
-    reddit_posts = []
     oracle_by_id = {}
     tracked_cards = [*watchlist, *collection]
 
@@ -274,28 +165,14 @@ def scan_spoilers_and_trends(watchlist, collection, session=requests, max_sets=6
         spoilers = fetch_scryfall_spoilers(session=session, max_sets=max_sets)
     except (requests.RequestException, ValueError, KeyError) as error:
         errors.append(f"Scryfall (spoilers): {error}")
-    try:
-        reddit_posts = fetch_reddit_posts(session=session, limit=reddit_limit)
-    except (requests.RequestException, ET.ParseError) as error:
-        errors.append(f"Reddit r/mtgfinance: {error}")
 
-    scryfall_errors = [error for error in errors if error.startswith("Scryfall")]
-    reddit_errors = [error for error in errors if error.startswith("Reddit")]
-    storage.record_source_health(
-        "scryfall", not scryfall_errors, "; ".join(scryfall_errors)
-    )
-    storage.record_source_health("reddit", not reddit_errors, "; ".join(reddit_errors))
+    storage.record_source_health("scryfall", not errors, "; ".join(errors))
 
-    result = analyze_spoilers_and_trends(spoilers, reddit_posts, watchlist, collection, oracle_by_id)
+    result = analyze_spoilers(spoilers, watchlist, collection, oracle_by_id)
     result["errors"] = errors
-    tracked = [*watchlist, *collection]
-    result["events"] = extract_market_events(reddit_posts, tracked)
     checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
     for alert in result["alerts"]:
         storage.record_alert(
             alert["id"], alert["category"], alert.get("scryfall_id"), checked_at, alert
         )
-    for event in result["events"]:
-        event_id = f"community:{event['event_type']}:{event.get('scryfall_id')}:{event.get('source_url')}"
-        storage.record_alert(event_id, event["event_type"], event.get("scryfall_id"), checked_at, event)
     return result

@@ -35,7 +35,7 @@ pour l'affichage sont mis en cache jusqu'à 60 secondes.
 
 ## Workflows (`.github/workflows`)
 
-- `stock_analysis.yml` : analyse des prix, spoilers, Reddit, alertes (07h et 19h UTC).
+- `stock_analysis.yml` : analyse des prix, réimpressions annoncées par Scryfall et alertes pour les cartes d'au moins 1,00 € (07h et 19h UTC).
 - `weekly_report.yml` : rapport hebdomadaire (lundi).
 - `backup.yml` : sauvegarde chiffrée (dimanche).
 - `healthcheck.yml` : contrôle manuel de la base (applique les migrations en attente, affiche la version du schéma et signale sans les modifier les données anciennes invalides). Même contrôle en local : `python -m database.healthcheck`.

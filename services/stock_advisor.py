@@ -1,7 +1,7 @@
 """Règles métier : explique une variation de prix d'une carte du stock et donne un verdict d'action.
 
 Aucun appel externe : le diagnostic croise la variation de prix, la popularité EDHREC et
-les événements de marché déjà détectés (spoilers/réimpressions, bans, rumeurs Reddit).
+les événements de marché déjà détectés (réimpressions annoncées par Scryfall).
 """
 from datetime import date, timedelta
 
@@ -118,7 +118,7 @@ def advise(change_pct, popularity_delta=None, events=()):
 
 
 def advise_event(alert):
-    """Verdict pour une alerte d'événement (spoiler, hype Reddit, ban) sur une carte du stock."""
+    """Verdict pour une alerte d'événement (réimpression annoncée) sur une carte du stock."""
     category = alert.get("category") or alert.get("event_type")
     if category in REPRINT_EVENTS:
         return {"verdict": "Vérifier la réimpression et évaluer le risque avant d'envisager de vendre."}

@@ -215,13 +215,13 @@ class WorkflowTests(unittest.TestCase):
         storage.record_source_health(
             "scryfall_bulk", False, "Bulk HTTP 503", checked_at="2026-10-14T00:00:00+00:00"
         )
-        storage.record_source_health("reddit", False, "HTTP 503", checked_at="2026-10-14T00:00:00+00:00")
+        storage.record_source_health("reddit", False, "HTTP 404", checked_at="2026-10-14T00:00:00+00:00")
 
         statuses = get_source_statuses(now=datetime(2026, 10, 14, tzinfo=timezone.utc))
 
         self.assertEqual(statuses["scryfall"]["status"], "HEALTHY")
         self.assertEqual(statuses["scryfall_bulk"]["status"], "FAILED")
-        self.assertEqual(statuses["reddit"]["status"], "FAILED")
+        self.assertNotIn("reddit", statuses)
 
 
 if __name__ == "__main__":

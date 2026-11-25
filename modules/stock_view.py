@@ -25,6 +25,22 @@ def render_mana_cost_html(mana_str):
     return re.sub(r'\{([^}]+)\}', replacer, mana_str)
 
 
+def render_popularity_badge(delta_pct):
+    """Pastille ronde néon : évolution du rang EDHREC sur 30 jours (positif = plus populaire)."""
+    if delta_pct is None:
+        state, label, hint = "na", "n/d", "Popularité EDHREC : données insuffisantes"
+    else:
+        value = round(float(delta_pct))
+        if abs(float(delta_pct)) <= 0.5:
+            state, label = "flat", "0%"
+        else:
+            state = "up" if delta_pct > 0 else "down"
+            label = "99+" if abs(value) > 99 else f"{value:+d}%"
+        direction = {"up": "en hausse", "down": "en baisse", "flat": "stable"}[state]
+        hint = f"Popularité EDHREC {direction} sur 30 jours ({float(delta_pct):+.1f} %)"
+    return f'<span class="pop-badge pop-{state}" title="{hint}">{label}</span>'
+
+
 def render_margin_badge(net_profit, roi_percent):
     is_positive = float(net_profit) >= 0
     badge_class = "profit-badge" if is_positive else "loss-badge"
@@ -256,9 +272,12 @@ def render_stock_tab():
 
                         s_price = card.get("selling_price", 0.0)
                         st.markdown(f"Prix de vente : **{s_price:.2f} €**")
-                        st.caption("Popularité EDHREC (30 j) : " + stock_advisor.popularity_badge(
-                            popularity_by_card.get(str(card.get("scryfall_id")))
-                        ))
+                        st.markdown(
+                            "<div class='pop-row'>"
+                            + render_popularity_badge(popularity_by_card.get(str(card.get("scryfall_id"))))
+                            + "<span>EDHREC · 30 j</span></div>",
+                            unsafe_allow_html=True,
+                        )
                         if target_status == "FOR_SALE" and card.get("scryfall_id"):
                             with st.popover("Vendre", use_container_width=True):
                                 actual_p = st.number_input("Prix de vente réel (€) :", min_value=0.0, value=float(s_price), step=0.5, key=f"p_{card['scryfall_id']}_{original_index}")

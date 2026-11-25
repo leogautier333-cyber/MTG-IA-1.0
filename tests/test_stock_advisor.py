@@ -86,9 +86,9 @@ class AdvisorIntegrationTests(unittest.TestCase):
             "id": "spoiler:x:stock-card", "category": "SPOILER_REPRINT", "card_name": "Stock Card",
             "scryfall_id": "stock-card", "message": "Réimpression détectée.",
         }
-        scan = {"alerts": [spoiler_alert], "events": [], "errors": []}
+        scan = {"alerts": [spoiler_alert], "errors": []}
         with patch.object(
-            phase_one_monitor.spoiler_watcher, "scan_spoilers_and_trends", return_value=scan
+            phase_one_monitor.spoiler_watcher, "scan_spoilers", return_value=scan
         ) as scan_mock:
             first = phase_one_monitor.scan_stock_events()
             phase_one_monitor.scan_stock_events()

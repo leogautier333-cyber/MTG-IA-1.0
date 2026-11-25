@@ -7,7 +7,6 @@ from database import storage
 DEFAULT_MAX_AGE_HOURS = {
     "scryfall": max(1, int(os.getenv("NEXUS_SCRYFALL_MAX_AGE_HOURS", "36"))),
     "scryfall_bulk": max(1, int(os.getenv("NEXUS_SCRYFALL_BULK_MAX_AGE_HOURS", "36"))),
-    "reddit": max(1, int(os.getenv("NEXUS_REDDIT_MAX_AGE_HOURS", "48"))),
 }
 
 

@@ -218,6 +218,25 @@ input[type="radio"] {{ accent-color: var(--accent) !important; }}
 .filter-toolbar {{
     background: rgba(12,5,7,.6); border: 1px solid var(--line); padding: .8rem .9rem; margin-bottom: 1rem;
 }}
+.pop-row {{ display: flex; align-items: center; gap: .6rem; margin: .35rem 0 .2rem;
+    font-family: 'Share Tech Mono', monospace; font-size: .74rem; color: var(--muted); }}
+.pop-badge {{
+    --tone: var(--muted);
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 2.7rem; height: 2.7rem; border-radius: 50%; box-sizing: border-box;
+    font-family: 'Orbitron', sans-serif; font-size: .6rem; font-weight: 700; letter-spacing: .02em;
+    color: var(--tone); background: radial-gradient(circle, rgba(0,0,0,.85) 55%, color-mix(in srgb, var(--tone) 22%, transparent));
+    border: 2px solid var(--tone); text-shadow: 0 0 6px var(--tone);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--tone) 70%, transparent), inset 0 0 8px color-mix(in srgb, var(--tone) 35%, transparent);
+}}
+.pop-up {{ --tone: var(--green); }}
+.pop-down {{ --tone: var(--primary); animation: pop-alert 2.4s ease-in-out infinite; }}
+.pop-flat {{ --tone: var(--yellow); }}
+.pop-na {{ --tone: #6e5d61; box-shadow: none; text-shadow: none; border-style: dashed; }}
+@keyframes pop-alert {{
+    0%, 100% {{ box-shadow: 0 0 6px color-mix(in srgb, var(--tone) 60%, transparent), inset 0 0 8px color-mix(in srgb, var(--tone) 30%, transparent); }}
+    50% {{ box-shadow: 0 0 14px var(--tone), inset 0 0 10px color-mix(in srgb, var(--tone) 45%, transparent); }}
+}}
 .card-meta {{ font-family: 'Share Tech Mono', monospace; font-size: .76rem; color: var(--muted); line-height: 1.7; }}
 .card-title-row {{ display: flex; justify-content: space-between; align-items: center; gap: .75rem; margin-bottom: .25rem; }}
 .card-title-row .stMarkdown {{ margin-bottom: 0; }}
@@ -248,7 +267,7 @@ input[type="radio"] {{ accent-color: var(--accent) !important; }}
 }}
 h1 {{ animation: neon-flicker 6s infinite; }}
 @media (prefers-reduced-motion: reduce) {{
-    h1, .js-plotly-plot .barlayer .point path, .stApp::before,
+    h1, .pop-down, .js-plotly-plot .barlayer .point path, .stApp::before,
     [data-testid="stAppViewContainer"]::before {{ animation: none !important; }}
     .stApp::after {{ display: none; }}
 }}

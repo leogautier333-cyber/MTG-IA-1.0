@@ -7,7 +7,6 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -16,10 +15,13 @@ import scryfall
 
 from database import market_data, storage
 from services import inventory, spoiler_watcher, stock_advisor
+from services.money import decimal_amount
 
 
 LOGGER = logging.getLogger("magic_nexus.phase_one")
 ALERT_THRESHOLD_PCT = 10.0
+# Valeur unitaire (prix de marché Scryfall, €) sous laquelle une variation est du bruit bulk.
+MIN_ALERT_UNIT_PRICE = Decimal("1.00")
 POLL_INTERVAL_SECONDS = max(300, int(os.getenv("NEXUS_POLL_INTERVAL_SECONDS", "3600")))
 DISCORD_WEBHOOK_URL = "DISCORD_WEBHOOK_URL"
 PRICE_ALERT = "PRICE"
@@ -93,6 +95,11 @@ def send_test_alert(session=requests, webhook_url=None):
         webhook_url=webhook_url,
     )
     return True
+
+
+def meets_alert_floor(previous_price, current_price):
+    """Vrai si la carte vaut au moins MIN_ALERT_UNIT_PRICE avant ou après la variation (Decimal)."""
+    return max(decimal_amount(previous_price), decimal_amount(current_price)) >= MIN_ALERT_UNIT_PRICE
 
 
 def _stock_positions(collection):
@@ -345,7 +352,12 @@ def _deliver_pending_alerts(active_positions, session=requests):
             still_in_stock = (alert.get("scryfall_id"), bool(alert.get("foil"))) in active_positions
         else:
             still_in_stock = alert.get("scryfall_id") in active_ids
-        if not still_in_stock:
+        below_floor = (
+            alert.get("kind", PRICE_ALERT) == PRICE_ALERT
+            and "previous_price" in alert and "current_price" in alert
+            and not meets_alert_floor(alert["previous_price"], alert["current_price"])
+        )
+        if not still_in_stock or below_floor:
             alert["status"] = "cancelled"
             changed.append(alert)
             continue
@@ -399,7 +411,7 @@ def _deliver_pending_alerts(active_positions, session=requests):
 
 
 def _notify_source_problem(errors, session=requests):
-    """Prévient sur Discord quand Scryfall ou Reddit ne répondent pas (au plus une fois par jour)."""
+    """Prévient sur Discord quand Scryfall ne répond pas (au plus une fois par jour)."""
     today = datetime.now(timezone.utc).date().isoformat()
     if storage.get_metadata("source_alert_date") == today:
         return
@@ -416,7 +428,7 @@ def _notify_source_problem(errors, session=requests):
 
 
 def scan_stock_events(session=requests):
-    """Veille spoilers/réimpressions/Reddit/bans limitée aux cartes du stock.
+    """Veille des réimpressions annoncées par Scryfall, limitée aux cartes du stock.
 
     Retourne les événements détectés (pour contextualiser les variations de prix) ; les
     nouveaux événements sont enregistrés comme alertes en attente de livraison Discord.
@@ -430,14 +442,14 @@ def scan_stock_events(session=requests):
         for p in positions.values()
     ]
     id_by_name = {card["name"].casefold(): card["scryfall_id"] for card in stock_cards}
-    result = spoiler_watcher.scan_spoilers_and_trends([], stock_cards, session=session)
+    result = spoiler_watcher.scan_spoilers([], stock_cards, session=session)
     for error in result.get("errors", []):
         LOGGER.warning("Veille marché partielle : %s", error)
     if result.get("errors"):
         _notify_source_problem(result["errors"], session=session)
 
     detected = []
-    for item in (*result.get("alerts", []), *result.get("events", [])):
+    for item in result.get("alerts", []):
         category = item.get("category") or item.get("event_type")
         scryfall_id = item.get("scryfall_id") or id_by_name.get(str(item.get("card_name", "")).casefold())
         if not scryfall_id:
@@ -455,7 +467,7 @@ def scan_stock_events(session=requests):
         known_ids.add(alert_id)
         message = item.get("message") or (
             f"{item.get('card_name')} : événement {item['category']} détecté "
-            f"({item.get('evidence') or item.get('source') or 'Reddit'})."
+            f"({item.get('evidence') or item.get('source') or 'Scryfall'})."
         )
         new_alerts.append({
             "id": alert_id, "kind": item["category"], "status": "pending", "created_at": created_at,
@@ -540,6 +552,8 @@ def _analyze_stock_prices(session=requests, events=()):
             if not previous or previous["price_eur"] <= 0:
                 first_observations.append(f"{position['name']} ({position['set_code']})")
                 continue
+            if not meets_alert_floor(previous["price_eur"], current_price):
+                continue
             change_pct = (current_price - previous["price_eur"]) / previous["price_eur"] * 100
             popularity_delta = stock_advisor.popularity_delta_from_history(
                 demand_histories[position["scryfall_id"]]
@@ -598,7 +612,7 @@ def run_analysis(session=requests):
         try:
             events = scan_stock_events(session=session)
         except Exception:
-            LOGGER.exception("Échec de la veille spoilers/Reddit ; analyse des prix poursuivie.")
+            LOGGER.exception("Échec de la veille des réimpressions ; analyse des prix poursuivie.")
             events = []
         LOGGER.info("Veille événements : %.2fs.", time.perf_counter() - started)
         result = _analyze_stock_prices(session=session, events=events)

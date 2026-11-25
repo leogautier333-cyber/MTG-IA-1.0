@@ -275,38 +275,3 @@ def scan_snapshot_buyouts(cards, minimum_score=60, today=None):
         storage.record_alert(alert_id, "ANTI_BUYOUT", scryfall_id, now.isoformat(timespec="seconds"), alert)
         findings.append({"alert_id": alert_id, **alert})
     return findings
-
-
-def extract_market_events(posts, tracked_cards):
-    event_rules = (
-        ("REPRINT_RUMOR", ("reprint", "réimpression", "reprint rumor")),
-        ("BAN_RUMOR", ("ban", "banni", "banned", "banlist")),
-        ("DECK_TECH", ("deck tech", "top 8", "tournament", "tournoi", "edhrec")),
-        ("SPECULATIVE_PUMP", ("buyout", "pump", "spike", "to the moon", "squeeze")),
-    )
-    events = {}
-    for post in posts:
-        text = f"{post.get('title', '')} {post.get('text', '')}".casefold()
-        for card in tracked_cards:
-            name = str(card.get("name", "")).casefold()
-            if len(name) < 3 or name not in text:
-                continue
-            matching_type = next((
-                event_type for event_type, terms in event_rules
-                if any(term in text for term in terms)
-            ), None)
-            if not matching_type:
-                continue
-            source_url = post.get("url", "")
-            key = (card.get("scryfall_id"), matching_type, source_url or text[:100])
-            event = events.setdefault(key, {
-                "event_type": matching_type,
-                "scryfall_id": card.get("scryfall_id"),
-                "card_name": card.get("name"),
-                "source": "Reddit r/mtgfinance",
-                "source_url": source_url,
-                "confidence": 0.55 if source_url else 0.4,
-                "evidence": post.get("title", ""),
-            })
-            event["confidence"] = min(0.9, event["confidence"] + 0.05)
-    return list(events.values())

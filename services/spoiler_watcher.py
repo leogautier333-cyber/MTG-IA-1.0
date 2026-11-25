@@ -11,7 +11,7 @@ from services.market_signals import extract_market_events
 
 
 SCRYFALL_API = "https://api.scryfall.com"
-REDDIT_FEED = "https://www.reddit.com/r/mtgfinance/.rss"
+REDDIT_FEED = "https://www.reddit.com/r/mtgfinance.rss"
 HEADERS = {"User-Agent": "MagicTradingProfitManager/2.0", "Accept": "application/json"}
 REDDIT_HEADERS = {"User-Agent": "MagicTradingProfitManager/2.0 (public RSS monitor)"}
 REPRINT_SET_TYPES = {"expansion", "commander", "masters", "draft_innovation", "core", "promo"}

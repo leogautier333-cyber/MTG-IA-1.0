@@ -18,6 +18,7 @@ from modules.search_view import render_search_tab
 from modules.prices_view import render_prices_tab
 from modules.stock_view import render_stock_tab
 from modules.theme import apply_theme
+from modules.version import current_version
 
 # -------------------------------------------------------------------
 # Configuration de la page Streamlit
@@ -32,6 +33,9 @@ st.set_page_config(
 apply_theme()
 
 st.title("Carnet de Mana")
+_version = current_version()
+if _version:
+    st.caption(f"version {_version}")
 
 tab_names = [
     "Stock & Ventes",
